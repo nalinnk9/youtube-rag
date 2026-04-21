@@ -1,0 +1,10 @@
+.env
+chroma_db/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+*.m4a
+*.mp3
+*.wav

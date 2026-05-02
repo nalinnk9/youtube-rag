@@ -15,9 +15,13 @@ def retrieve(coll, question: str, oai: OpenAI, k: int = 15) -> list[dict]:
         return hits
 
     for i in range(len(r["ids"][0])):
+        meta = r["metadatas"][0][i] or {}
+        # parent_child strategy stores the larger parent_text in metadata; prefer it
+        # for the LLM context while keeping the small child for embedding.
+        text = meta.pop("parent_text", None) or r["documents"][0][i]
         hits.append({
-            "text": r["documents"][0][i],
-            **r["metadatas"][0][i],
+            "text": text,
+            **meta,
             "distance": r["distances"][0][i] if r.get("distances") else None,
         })
     return hits

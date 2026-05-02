@@ -67,7 +67,7 @@ function IngestPanel({ onIngested }) {
   const submit = async () => {
     const trimmed = url.trim();
     if (!trimmed) return;
-    setMsg("Ingesting in the background — check the server terminal for progress…");
+    setMsg("Ingesting in the background under all chunking strategies — check the server terminal for progress…");
     try {
       await fetch("/ingest", {
         method: "POST",
@@ -108,13 +108,37 @@ function IngestPanel({ onIngested }) {
   );
 }
 
-function AskPanel({ onAsk, loading }) {
+function AskPanel({ onAsk, loading, compareMode, setCompareMode, judgeMode, setJudgeMode }) {
   const [q, setQ] = useState("");
   return (
     <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
-      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">
-        Ask a question
-      </label>
+      <div className="flex items-center justify-between mb-2">
+        <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wide">
+          Ask a question
+        </label>
+        <div className="flex items-center gap-3 text-xs">
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={compareMode}
+              onChange={(e) => setCompareMode(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            <span className="font-medium text-slate-700">Compare strategies</span>
+          </label>
+          {compareMode && (
+            <select
+              value={judgeMode}
+              onChange={(e) => setJudgeMode(e.target.value)}
+              className="border border-slate-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              <option value="answer">Judge: answer quality</option>
+              <option value="retrieval">Judge: retrieval only</option>
+              <option value="both">Judge: both</option>
+            </select>
+          )}
+        </div>
+      </div>
       <div className="flex gap-2">
         <input
           type="text"
@@ -129,43 +153,181 @@ function AskPanel({ onAsk, loading }) {
           disabled={loading || !q.trim()}
           className="px-4 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? "Thinking…" : "Ask"}
+          {loading ? "Thinking…" : compareMode ? "Compare" : "Ask"}
         </button>
       </div>
     </div>
   );
 }
 
+function CitedAnswer({ answer, sources, onJump }) {
+  if (!answer) return null;
+  const parts = answer.split(/(\[\d+\])/g);
+  return (
+    <div className="text-slate-800 leading-relaxed whitespace-pre-wrap">
+      {parts.map((p, i) => {
+        const m = p.match(/^\[(\d+)\]$/);
+        if (m) {
+          const n = parseInt(m[1], 10);
+          const src = sources.find((s) => s.n === n);
+          if (src) {
+            return (
+              <button
+                key={i}
+                onClick={() => onJump(src.video_id, src.start)}
+                className="inline-flex items-center justify-center w-6 h-6 mx-0.5 rounded bg-blue-100 text-blue-700 text-xs font-semibold hover:bg-blue-200 align-middle"
+                title={`Jump to ${src.timestamp} in "${src.title}"`}
+              >
+                {n}
+              </button>
+            );
+          }
+        }
+        return <span key={i}>{p}</span>;
+      })}
+    </div>
+  );
+}
+
 function AnswerBlock({ answer, sources, onJump }) {
   if (!answer) return null;
-  // Split answer on [n] markers and render each as a clickable button
-  const parts = answer.split(/(\[\d+\])/g);
   return (
     <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
       <div className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">
         Answer
       </div>
-      <div className="text-slate-800 leading-relaxed whitespace-pre-wrap">
-        {parts.map((p, i) => {
-          const m = p.match(/^\[(\d+)\]$/);
-          if (m) {
-            const n = parseInt(m[1], 10);
-            const src = sources.find((s) => s.n === n);
-            if (src) {
-              return (
-                <button
-                  key={i}
-                  onClick={() => onJump(src.video_id, src.start)}
-                  className="inline-flex items-center justify-center w-6 h-6 mx-0.5 rounded bg-blue-100 text-blue-700 text-xs font-semibold hover:bg-blue-200 align-middle"
-                  title={`Jump to ${src.timestamp} in "${src.title}"`}
-                >
-                  {n}
-                </button>
-              );
-            }
-          }
-          return <span key={i}>{p}</span>;
-        })}
+      <CitedAnswer answer={answer} sources={sources} onJump={onJump} />
+    </div>
+  );
+}
+
+function ScorePanel({ scores, mode }) {
+  if (!scores) return null;
+  const axes = Object.keys(scores).filter((k) => k !== "total");
+  return (
+    <div className="border-t border-slate-200 pt-2 mt-2 text-xs">
+      <div className="text-slate-500 font-semibold uppercase tracking-wide mb-1">{mode} scores</div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+        {axes.map((axis) => (
+          <div key={axis} className="flex justify-between">
+            <span className="text-slate-600 capitalize">{axis}</span>
+            <span className="font-mono text-slate-800">{scores[axis]}</span>
+          </div>
+        ))}
+      </div>
+      {scores.total != null && (
+        <div className="flex justify-between mt-1 pt-1 border-t border-slate-100">
+          <span className="text-slate-700 font-semibold">Total</span>
+          <span className="font-mono font-semibold text-slate-900">{scores.total}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StrategyColumn({ result, judge, onJump }) {
+  const isWinner = (() => {
+    if (!judge) return false;
+    if (judge.winner) return judge.winner === result.strategy;
+    if (judge.answer && judge.answer.winner === result.strategy) return true;
+    if (judge.retrieval && judge.retrieval.winner === result.strategy) return true;
+    return false;
+  })();
+
+  let answerScores = null;
+  let retrievalScores = null;
+  if (judge) {
+    if (judge.mode === "answer" && judge.scores) {
+      answerScores = judge.scores[result.strategy];
+    } else if (judge.mode === "retrieval" && judge.scores) {
+      retrievalScores = judge.scores[result.strategy];
+    } else if (judge.mode === "both") {
+      answerScores = judge.answer && judge.answer.scores && judge.answer.scores[result.strategy];
+      retrievalScores = judge.retrieval && judge.retrieval.scores && judge.retrieval.scores[result.strategy];
+    }
+  }
+
+  const borderClass = isWinner ? "border-emerald-400 ring-2 ring-emerald-200" : "border-slate-200";
+
+  return (
+    <div className={`bg-white rounded-lg shadow-sm border ${borderClass} p-3 flex flex-col`}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-mono font-semibold text-slate-700">{result.strategy}</span>
+        {isWinner && (
+          <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">Winner</span>
+        )}
+      </div>
+      <div className="text-xs text-slate-400 mb-2">
+        {result.latency_ms}ms · {result.n_used}/{result.n_retrieved} chunks
+      </div>
+      <div className="flex-1 text-sm">
+        <CitedAnswer answer={result.answer} sources={result.sources || []} onJump={onJump} />
+      </div>
+      {(result.sources || []).length > 0 && (
+        <div className="mt-3 pt-2 border-t border-slate-100 space-y-1">
+          {(result.sources || []).map((src) => (
+            <button
+              key={src.n}
+              onClick={() => onJump(src.video_id, src.start)}
+              className="flex items-center gap-1.5 text-xs text-left w-full hover:bg-slate-50 rounded px-1 py-0.5"
+            >
+              <span className="inline-flex items-center justify-center w-4 h-4 rounded bg-blue-100 text-blue-700 text-[10px] font-semibold flex-shrink-0">
+                {src.n}
+              </span>
+              <span className="truncate text-slate-600">{src.title}</span>
+              <span className="text-blue-600 font-medium flex-shrink-0">{src.timestamp}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {answerScores && <ScorePanel scores={answerScores} mode="Answer" />}
+      {retrievalScores && <ScorePanel scores={retrievalScores} mode="Retrieval" />}
+    </div>
+  );
+}
+
+function CompareView({ compareData, onJump }) {
+  if (!compareData) return null;
+  const { results, judge } = compareData;
+  return (
+    <div className="space-y-3">
+      {judge && !judge.error && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm">
+          <div className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-1">
+            Judge ({judge.mode})
+          </div>
+          {judge.mode === "both" ? (
+            <div className="space-y-1">
+              {judge.answer && (
+                <div>
+                  <span className="font-semibold">Answer winner:</span> {judge.answer.winner}
+                  <div className="text-slate-600 text-xs">{judge.answer.reasoning}</div>
+                </div>
+              )}
+              {judge.retrieval && (
+                <div>
+                  <span className="font-semibold">Retrieval winner:</span> {judge.retrieval.winner}
+                  <div className="text-slate-600 text-xs">{judge.retrieval.reasoning}</div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              <span className="font-semibold">Winner:</span> {judge.winner}
+              <div className="text-slate-600 text-xs mt-0.5">{judge.reasoning}</div>
+            </div>
+          )}
+        </div>
+      )}
+      {judge && judge.error && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+          Judge error: {judge.error}
+        </div>
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        {results.map((r) => (
+          <StrategyColumn key={r.strategy} result={r} judge={judge} onJump={onJump} />
+        ))}
       </div>
     </div>
   );
@@ -246,9 +408,12 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [answer, setAnswer] = useState(null);
   const [sources, setSources] = useState([]);
+  const [compareData, setCompareData] = useState(null);
   const [stats, setStats] = useState({ videos: 0, chunks: 0 });
   const [videos, setVideos] = useState([]);
   const [currentVideo, setCurrentVideo] = useState(null);
+  const [compareMode, setCompareMode] = useState(false);
+  const [judgeMode, setJudgeMode] = useState("answer");
 
   const playerRef = useRef(null);
   const ytReady = useYouTubeReady();
@@ -290,52 +455,88 @@ function App() {
     setLoading(true);
     setAnswer(null);
     setSources([]);
+    setCompareData(null);
     try {
-      const r = await fetch("/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
-      });
-      if (!r.ok) {
-        const err = await r.text();
-        setAnswer(`Error: ${err}`);
+      if (compareMode) {
+        const r = await fetch("/ask_compare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question, judge_mode: judgeMode }),
+        });
+        if (!r.ok) {
+          setAnswer(`Error: ${await r.text()}`);
+        } else {
+          setCompareData(await r.json());
+        }
       } else {
-        const data = await r.json();
-        setAnswer(data.answer);
-        setSources(data.sources || []);
+        const r = await fetch("/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question }),
+        });
+        if (!r.ok) {
+          setAnswer(`Error: ${await r.text()}`);
+        } else {
+          const data = await r.json();
+          setAnswer(data.answer);
+          setSources(data.sources || []);
+        }
       }
     } catch (e) {
       setAnswer(`Network error: ${e.message}`);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [compareMode, judgeMode]);
 
   return (
-    <div className="max-w-6xl mx-auto p-6">
+    <div className="max-w-7xl mx-auto p-6">
       <Header stats={stats} onRefresh={refreshStats} />
       <IngestPanel onIngested={refreshStats} />
       <VideosList videos={videos} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        <div className="lg:col-span-3 space-y-4">
-          <AskPanel onAsk={ask} loading={loading} />
-          <AnswerBlock answer={answer} sources={sources} onJump={jumpTo} />
-          {sources.length > 0 && (
-            <div className="space-y-2">
-              <div className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
-                Sources
+      <div className={`grid grid-cols-1 ${compareMode ? '' : 'lg:grid-cols-5'} gap-6`}>
+        <div className={compareMode ? '' : 'lg:col-span-3 space-y-4'}>
+          <AskPanel
+            onAsk={ask}
+            loading={loading}
+            compareMode={compareMode}
+            setCompareMode={setCompareMode}
+            judgeMode={judgeMode}
+            setJudgeMode={setJudgeMode}
+          />
+          <div className={compareMode ? "mt-4" : ""}>
+            {!compareMode && <AnswerBlock answer={answer} sources={sources} onJump={jumpTo} />}
+            {!compareMode && sources.length > 0 && (
+              <div className="space-y-2 mt-4">
+                <div className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                  Sources
+                </div>
+                {sources.map((src) => (
+                  <SourceCard key={src.n} src={src} onJump={jumpTo} />
+                ))}
               </div>
-              {sources.map((src) => (
-                <SourceCard key={src.n} src={src} onJump={jumpTo} />
-              ))}
-            </div>
-          )}
+            )}
+            {compareMode && <CompareView compareData={compareData} onJump={jumpTo} />}
+            {compareMode && !compareData && answer && (
+              <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mt-4 text-sm text-red-600">
+                {answer}
+              </div>
+            )}
+          </div>
         </div>
-        <div className="lg:col-span-2">
+        {!compareMode && (
+          <div className="lg:col-span-2">
+            <Player currentVideo={currentVideo} />
+          </div>
+        )}
+      </div>
+
+      {compareMode && (
+        <div className="fixed bottom-4 right-4 w-80 z-10 shadow-2xl">
           <Player currentVideo={currentVideo} />
         </div>
-      </div>
+      )}
 
       <footer className="text-center text-xs text-slate-400 mt-12">
         YouTube RAG · local demo

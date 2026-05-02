@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 from .config import settings
 from .ingest import ingest_playlist
+from .pipeline.chunking_strategies import collection_name_for
+from .pipeline.compare import ask_compare
 from .pipeline.generation import generate_answer
 from .pipeline.retrieval import rerank, retrieve
 from .pipeline.vectorstore import get_collection
@@ -23,21 +25,31 @@ def _startup_check():
     if not settings.cohere_api_key:
         print("ℹ️  COHERE_API_KEY not set — reranking disabled (falling back to top-K).")
     print(f"   LLM: {settings.llm_provider} / {settings.llm_model}")
+    print(f"   Judge: {settings.judge_provider} / {settings.judge_model}")
     print(f"   Embeddings: {settings.embedding_model}")
     print(f"   Chroma path: {settings.chroma_path}")
+    print(f"   Strategies: {', '.join(settings.strategy_list)}")
 
 
 _startup_check()
 
 app = FastAPI(title="YouTube RAG")
 
-# Shared resources
-_coll = get_collection(settings.chroma_path, settings.collection_name)
 _oai = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
+
+
+def _default_collection():
+    return get_collection(settings.chroma_path, collection_name_for(settings.default_strategy))
 
 
 class AskRequest(BaseModel):
     question: str
+    strategy: str | None = None
+
+
+class AskCompareRequest(BaseModel):
+    question: str
+    judge_mode: str = "answer"
 
 
 class IngestRequest(BaseModel):
@@ -52,9 +64,43 @@ def ask(req: AskRequest):
     if _oai is None:
         raise HTTPException(500, "OPENAI_API_KEY not configured")
 
-    hits = retrieve(_coll, q, _oai, k=settings.top_k_retrieve)
+    strategy = req.strategy or settings.default_strategy
+    if strategy not in settings.strategy_list:
+        raise HTTPException(400, f"unknown strategy: {strategy}")
+
+    coll = get_collection(settings.chroma_path, collection_name_for(strategy))
+    hits = retrieve(coll, q, _oai, k=settings.top_k_retrieve)
     ranked = rerank(q, hits, top_n=settings.top_k_rerank)
     return generate_answer(q, ranked)
+
+
+@app.post("/ask_compare")
+def ask_compare_endpoint(req: AskCompareRequest):
+    q = req.question.strip()
+    if not q:
+        raise HTTPException(400, "question cannot be empty")
+    if req.judge_mode not in {"answer", "retrieval", "both"}:
+        raise HTTPException(400, f"unknown judge_mode: {req.judge_mode}")
+    if _oai is None:
+        raise HTTPException(500, "OPENAI_API_KEY not configured")
+
+    return ask_compare(q, req.judge_mode, _oai)
+
+
+@app.get("/strategies")
+def strategies():
+    out = []
+    for s in settings.strategy_list:
+        coll = get_collection(settings.chroma_path, collection_name_for(s))
+        all_ = coll.get()
+        video_ids = {m["video_id"] for m in (all_.get("metadatas") or []) if m.get("video_id")}
+        out.append({
+            "name": s,
+            "videos": len(video_ids),
+            "chunks": len(all_.get("ids") or []),
+            "is_default": s == settings.default_strategy,
+        })
+    return {"strategies": out, "default": settings.default_strategy}
 
 
 @app.post("/ingest")
@@ -67,14 +113,16 @@ def ingest(req: IngestRequest, bg: BackgroundTasks):
 
 @app.get("/stats")
 def stats():
-    all_ = _coll.get()
+    coll = _default_collection()
+    all_ = coll.get()
     video_ids = {m["video_id"] for m in (all_.get("metadatas") or []) if m.get("video_id")}
     return {"videos": len(video_ids), "chunks": len(all_.get("ids") or [])}
 
 
 @app.get("/videos")
 def list_videos():
-    all_ = _coll.get()
+    coll = _default_collection()
+    all_ = coll.get()
     seen: dict[str, dict] = {}
     for m in (all_.get("metadatas") or []):
         vid = m.get("video_id")
@@ -88,7 +136,6 @@ def list_videos():
     return list(seen.values())
 
 
-# Serve frontend/index.html as the root
 _frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 if os.path.isdir(_frontend_dir):
     app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")

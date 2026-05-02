@@ -2,10 +2,19 @@
 import chromadb
 from openai import OpenAI
 
+_client = None
+
+
+def _get_client(path: str):
+    global _client
+    if _client is None:
+        _client = chromadb.PersistentClient(path=path)
+    return _client
+
 
 def get_collection(path: str, name: str = "videos"):
     """Return a persistent Chroma collection configured for cosine similarity."""
-    client = chromadb.PersistentClient(path=path)
+    client = _get_client(path)
     return client.get_or_create_collection(
         name=name,
         metadata={"hnsw:space": "cosine"},

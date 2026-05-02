@@ -20,5 +20,8 @@ yt-dlp>=2024.10.0
 # ASR fallback
 faster-whisper>=1.0.0
 
+# Tokenizer for token-aware chunking
+tiktoken>=0.7.0
+
 # Utilities
 tqdm>=4.66.0

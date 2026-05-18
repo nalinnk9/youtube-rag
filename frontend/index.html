@@ -3,27 +3,99 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>YouTube RAG</title>
+  <title>YouTube RAG — Ask anything, get cited answers</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://www.youtube.com/iframe_api"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+          },
+          animation: {
+            'fade-in': 'fadeIn 0.3s ease-out',
+            'slide-up': 'slideUp 0.4s ease-out',
+            'pulse-soft': 'pulseSoft 2s ease-in-out infinite',
+          },
+          keyframes: {
+            fadeIn: { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+            slideUp: { '0%': { opacity: 0, transform: 'translateY(8px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
+            pulseSoft: { '0%, 100%': { opacity: 1 }, '50%': { opacity: 0.6 } },
+          },
+        }
+      }
+    }
+  </script>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    :root {
+      --bg-grad: radial-gradient(1200px 600px at 0% 0%, rgb(238 242 255 / 0.6), transparent),
+                 radial-gradient(900px 500px at 100% 0%, rgb(250 245 255 / 0.6), transparent);
+    }
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+    body::before {
+      content: ''; position: fixed; inset: 0; background: var(--bg-grad);
+      pointer-events: none; z-index: 0;
+    }
+    #root { position: relative; z-index: 1; }
     .line-clamp-2 {
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .line-clamp-3 {
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    /* Smooth focus rings */
+    *:focus-visible { outline: none; }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      box-shadow: 0 0 0 3px rgb(99 102 241 / 0.25);
+    }
+    /* Strategy color stripes (left border on compare columns) */
+    .strat-sliding_window  { --strat: 99 102 241; }   /* indigo */
+    .strat-recursive_token { --strat: 139 92 246; }   /* violet */
+    .strat-sentence_window { --strat: 14 165 233; }   /* sky */
+    .strat-semantic        { --strat: 16 185 129; }   /* emerald */
+    .strat-fixed_time      { --strat: 245 158 11; }   /* amber */
+    .strat-parent_child    { --strat: 236 72 153; }   /* pink */
+    .strat-stripe {
+      position: relative; overflow: hidden;
+    }
+    .strat-stripe::before {
+      content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+      background: rgb(var(--strat, 99 102 241));
+    }
+    /* Subtle card shadow that lifts on hover */
+    .card {
+      background: rgb(255 255 255 / 0.85);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgb(228 228 231 / 0.7);
+      box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 0 0 1px rgb(0 0 0 / 0.02);
+      transition: box-shadow 0.2s ease, border-color 0.2s ease;
+    }
+    .card-hover:hover {
+      box-shadow: 0 4px 12px rgb(0 0 0 / 0.06), 0 0 0 1px rgb(99 102 241 / 0.1);
+      border-color: rgb(199 210 254);
+    }
+    /* Score bar */
+    .score-bar {
+      height: 4px; border-radius: 2px;
+      background: linear-gradient(90deg, rgb(var(--strat, 99 102 241)) 0%, rgb(var(--strat, 99 102 241)) 100%);
+      transition: width 0.4s ease-out;
     }
   </style>
 </head>
-<body class="bg-slate-50 text-slate-900">
+<body class="bg-zinc-50 text-zinc-900">
 <div id="root"></div>
 
 <script type="text/babel">
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 function useYouTubeReady() {
   const [ready, setReady] = useState(false);
@@ -40,21 +112,48 @@ function useYouTubeReady() {
   return ready;
 }
 
+function Spinner({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className="animate-spin">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.2" />
+      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function Logo() {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 via-violet-500 to-pink-500 flex items-center justify-center shadow-sm">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M8 5v14l11-7z" fill="white"/>
+        </svg>
+      </div>
+      <div className="flex flex-col leading-tight">
+        <span className="font-semibold text-zinc-900 tracking-tight">YouTube RAG</span>
+        <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-medium">cited answers from video</span>
+      </div>
+    </div>
+  );
+}
+
 function Header({ stats, onRefresh }) {
   return (
-    <header className="mb-6 flex items-baseline justify-between">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">YouTube RAG</h1>
-        <p className="text-sm text-slate-500 mt-0.5">
-          Ask questions, get answers with timestamped citations
-        </p>
-      </div>
+    <header className="mb-6 flex items-center justify-between animate-fade-in">
+      <Logo />
       <button
         onClick={onRefresh}
-        className="text-sm text-slate-500 hover:text-slate-900"
+        className="group flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/80 backdrop-blur border border-zinc-200/70 text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:border-indigo-200 hover:bg-indigo-50/50 transition-all"
         title="Refresh stats"
       >
-        {stats.videos} video{stats.videos === 1 ? '' : 's'} · {stats.chunks} chunks ↻
+        <span className="font-mono text-indigo-600">{stats.videos}</span>
+        <span className="text-zinc-500">video{stats.videos === 1 ? '' : 's'}</span>
+        <span className="text-zinc-300">·</span>
+        <span className="font-mono text-violet-600">{stats.chunks}</span>
+        <span className="text-zinc-500">chunks</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="text-zinc-400 group-hover:text-indigo-500 group-hover:rotate-180 transition-transform duration-500">
+          <path d="M4 4v6h6M20 20v-6h-6M4 10a8 8 0 0 1 14-3M20 14a8 8 0 0 1-14 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
       </button>
     </header>
   );
@@ -63,10 +162,12 @@ function Header({ stats, onRefresh }) {
 function IngestPanel({ onIngested }) {
   const [url, setUrl] = useState("");
   const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const submit = async () => {
     const trimmed = url.trim();
     if (!trimmed) return;
+    setBusy(true);
     setMsg("Ingesting in the background under all chunking strategies — check the server terminal for progress…");
     try {
       await fetch("/ingest", {
@@ -76,61 +177,101 @@ function IngestPanel({ onIngested }) {
       });
       setUrl("");
       setTimeout(onIngested, 3000);
-      setTimeout(onIngested, 15000);
+      setTimeout(() => { onIngested(); setBusy(false); }, 15000);
     } catch (e) {
       setMsg(`Error: ${e.message}`);
+      setBusy(false);
     }
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6">
-      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">
-        Ingest a playlist or video
-      </label>
+    <div className="card card-hover rounded-xl p-4 mb-6 animate-slide-up">
+      <div className="flex items-center justify-between mb-3">
+        <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700 uppercase tracking-wider">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-indigo-500">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/>
+          </svg>
+          Ingest a playlist or video
+        </label>
+      </div>
       <div className="flex gap-2">
         <input
           type="text"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="https://youtube.com/playlist?list=…  or  https://youtu.be/…"
-          className="flex-1 px-3 py-2 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
+          placeholder="https://youtube.com/playlist?list=…   or   https://youtu.be/…"
+          className="flex-1 px-4 py-2.5 bg-white border border-zinc-200 rounded-lg text-sm placeholder:text-zinc-400 focus:border-indigo-400 focus:bg-white transition-colors"
         />
         <button
           onClick={submit}
-          className="px-4 py-2 bg-slate-900 text-white rounded text-sm font-medium hover:bg-slate-800"
+          disabled={busy || !url.trim()}
+          className="px-5 py-2.5 bg-zinc-900 text-white rounded-lg text-sm font-medium hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] flex items-center gap-2"
         >
-          Ingest
+          {busy && <Spinner size={14} />}
+          {busy ? "Ingesting" : "Ingest"}
         </button>
       </div>
-      {msg && <div className="text-xs text-slate-500 mt-2">{msg}</div>}
+      {msg && (
+        <div className="mt-3 flex items-start gap-2 text-xs text-zinc-600 animate-fade-in">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-indigo-500 mt-0.5 flex-shrink-0">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+            <path d="M12 8v4M12 16h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+          {msg}
+        </div>
+      )}
     </div>
+  );
+}
+
+function ModePill({ active, onClick, label, icon }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+        active
+          ? 'bg-white text-indigo-700 shadow-sm border border-indigo-100'
+          : 'text-zinc-500 hover:text-zinc-700 border border-transparent'
+      }`}
+    >
+      {icon}{label}
+    </button>
   );
 }
 
 function AskPanel({ onAsk, loading, compareMode, setCompareMode, judgeMode, setJudgeMode }) {
   const [q, setQ] = useState("");
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
-      <div className="flex items-center justify-between mb-2">
-        <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wide">
+    <div className="card rounded-xl p-4 animate-slide-up">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700 uppercase tracking-wider">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-violet-500">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+            <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
           Ask a question
         </label>
-        <div className="flex items-center gap-3 text-xs">
-          <label className="flex items-center gap-1.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={compareMode}
-              onChange={(e) => setCompareMode(e.target.checked)}
-              className="rounded border-slate-300"
+        <div className="flex items-center gap-2">
+          <div className="flex items-center bg-zinc-100/80 rounded-lg p-0.5">
+            <ModePill
+              active={!compareMode}
+              onClick={() => setCompareMode(false)}
+              label="Single"
+              icon={<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="2"/></svg>}
             />
-            <span className="font-medium text-slate-700">Compare strategies</span>
-          </label>
+            <ModePill
+              active={compareMode}
+              onClick={() => setCompareMode(true)}
+              label="Compare"
+              icon={<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="7" height="16" rx="1" stroke="currentColor" strokeWidth="2"/><rect x="14" y="4" width="7" height="16" rx="1" stroke="currentColor" strokeWidth="2"/></svg>}
+            />
+          </div>
           {compareMode && (
             <select
               value={judgeMode}
               onChange={(e) => setJudgeMode(e.target.value)}
-              className="border border-slate-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:border-indigo-300 transition-colors cursor-pointer"
             >
               <option value="answer">Judge: answer quality</option>
               <option value="retrieval">Judge: retrieval only</option>
@@ -146,14 +287,19 @@ function AskPanel({ onAsk, loading, compareMode, setCompareMode, judgeMode, setJ
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !loading && q.trim() && onAsk(q.trim())}
           placeholder="e.g. How does gradient descent find the minimum?"
-          className="flex-1 px-3 py-2 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="flex-1 px-4 py-2.5 bg-white border border-zinc-200 rounded-lg text-sm placeholder:text-zinc-400 focus:border-indigo-400 transition-colors"
         />
         <button
           onClick={() => q.trim() && onAsk(q.trim())}
           disabled={loading || !q.trim()}
-          className="px-4 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-lg text-sm font-medium hover:from-indigo-700 hover:to-violet-700 disabled:opacity-50 disabled:cursor-not-allowed disabled:from-zinc-400 disabled:to-zinc-400 transition-all active:scale-[0.98] flex items-center gap-2 shadow-sm"
         >
-          {loading ? "Thinking…" : compareMode ? "Compare" : "Ask"}
+          {loading ? <Spinner size={14} /> : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path d="M5 12l14 0M13 5l7 7-7 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          )}
+          {loading ? "Thinking" : compareMode ? "Compare" : "Ask"}
         </button>
       </div>
     </div>
@@ -164,7 +310,7 @@ function CitedAnswer({ answer, sources, onJump }) {
   if (!answer) return null;
   const parts = answer.split(/(\[\d+\])/g);
   return (
-    <div className="text-slate-800 leading-relaxed whitespace-pre-wrap">
+    <div className="text-zinc-800 leading-relaxed whitespace-pre-wrap">
       {parts.map((p, i) => {
         const m = p.match(/^\[(\d+)\]$/);
         if (m) {
@@ -175,7 +321,7 @@ function CitedAnswer({ answer, sources, onJump }) {
               <button
                 key={i}
                 onClick={() => onJump(src.video_id, src.start)}
-                className="inline-flex items-center justify-center w-6 h-6 mx-0.5 rounded bg-blue-100 text-blue-700 text-xs font-semibold hover:bg-blue-200 align-middle"
+                className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 mx-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[11px] font-mono font-semibold hover:bg-indigo-600 hover:text-white align-baseline transition-colors"
                 title={`Jump to ${src.timestamp} in "${src.title}"`}
               >
                 {n}
@@ -192,8 +338,12 @@ function CitedAnswer({ answer, sources, onJump }) {
 function AnswerBlock({ answer, sources, onJump }) {
   if (!answer) return null;
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
-      <div className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">
+    <div className="card rounded-xl p-5 animate-slide-up">
+      <div className="flex items-center gap-2 text-xs font-semibold text-zinc-700 uppercase tracking-wider mb-3">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-emerald-500">
+          <path d="M9 12l2 2 4-4" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+          <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+        </svg>
         Answer
       </div>
       <CitedAnswer answer={answer} sources={sources} onJump={onJump} />
@@ -201,24 +351,36 @@ function AnswerBlock({ answer, sources, onJump }) {
   );
 }
 
-function ScorePanel({ scores, mode }) {
+function ScoreBar({ value, max = 5, strategyClass }) {
+  const pct = Math.max(0, Math.min(100, (value / max) * 100));
+  return (
+    <div className={`w-16 h-1 rounded-full bg-zinc-100 overflow-hidden ${strategyClass}`}>
+      <div className="score-bar" style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+function ScorePanel({ scores, mode, strategyClass }) {
   if (!scores) return null;
   const axes = Object.keys(scores).filter((k) => k !== "total");
   return (
-    <div className="border-t border-slate-200 pt-2 mt-2 text-xs">
-      <div className="text-slate-500 font-semibold uppercase tracking-wide mb-1">{mode} scores</div>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+    <div className="border-t border-zinc-100 pt-3 mt-3">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">{mode} scores</div>
+      <div className="space-y-1.5">
         {axes.map((axis) => (
-          <div key={axis} className="flex justify-between">
-            <span className="text-slate-600 capitalize">{axis}</span>
-            <span className="font-mono text-slate-800">{scores[axis]}</span>
+          <div key={axis} className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-zinc-600 capitalize">{axis}</span>
+            <div className="flex items-center gap-2">
+              <ScoreBar value={scores[axis]} strategyClass={strategyClass} />
+              <span className="font-mono text-zinc-800 w-3 text-right">{scores[axis]}</span>
+            </div>
           </div>
         ))}
       </div>
       {scores.total != null && (
-        <div className="flex justify-between mt-1 pt-1 border-t border-slate-100">
-          <span className="text-slate-700 font-semibold">Total</span>
-          <span className="font-mono font-semibold text-slate-900">{scores.total}</span>
+        <div className="flex justify-between items-baseline mt-2 pt-2 border-t border-zinc-100">
+          <span className="text-xs font-semibold text-zinc-700">Total</span>
+          <span className="font-mono font-bold text-sm text-zinc-900">{scores.total}</span>
         </div>
       )}
     </div>
@@ -237,51 +399,109 @@ function StrategyColumn({ result, judge, onJump }) {
   let answerScores = null;
   let retrievalScores = null;
   if (judge) {
-    if (judge.mode === "answer" && judge.scores) {
-      answerScores = judge.scores[result.strategy];
-    } else if (judge.mode === "retrieval" && judge.scores) {
-      retrievalScores = judge.scores[result.strategy];
-    } else if (judge.mode === "both") {
-      answerScores = judge.answer && judge.answer.scores && judge.answer.scores[result.strategy];
-      retrievalScores = judge.retrieval && judge.retrieval.scores && judge.retrieval.scores[result.strategy];
+    if (judge.mode === "answer" && judge.scores) answerScores = judge.scores[result.strategy];
+    else if (judge.mode === "retrieval" && judge.scores) retrievalScores = judge.scores[result.strategy];
+    else if (judge.mode === "both") {
+      answerScores = judge.answer?.scores?.[result.strategy];
+      retrievalScores = judge.retrieval?.scores?.[result.strategy];
     }
   }
 
-  const borderClass = isWinner ? "border-emerald-400 ring-2 ring-emerald-200" : "border-slate-200";
+  const strategyClass = `strat-${result.strategy}`;
+  const winnerRing = isWinner ? 'ring-2 ring-emerald-300/70 shadow-emerald-100' : '';
 
   return (
-    <div className={`bg-white rounded-lg shadow-sm border ${borderClass} p-3 flex flex-col`}>
+    <div className={`card strat-stripe ${strategyClass} ${winnerRing} rounded-xl p-4 flex flex-col animate-slide-up`} style={{ paddingLeft: '1.25rem' }}>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-mono font-semibold text-slate-700">{result.strategy}</span>
+        <span className="font-mono text-[11px] font-semibold tracking-tight" style={{ color: `rgb(var(--strat))` }}>
+          {result.strategy}
+        </span>
         {isWinner && (
-          <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">Winner</span>
+          <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4-6.2-4.5-6.2 4.5 2.4-7.4L2 9.4h7.6z"/>
+            </svg>
+            Winner
+          </span>
         )}
       </div>
-      <div className="text-xs text-slate-400 mb-2">
-        {result.latency_ms}ms · {result.n_used}/{result.n_retrieved} chunks
+      <div className="flex items-center gap-3 text-[11px] text-zinc-400 mb-3 font-mono">
+        <span>{result.latency_ms}ms</span>
+        <span className="text-zinc-300">·</span>
+        <span>{result.n_used}/{result.n_retrieved} chunks</span>
       </div>
-      <div className="flex-1 text-sm">
+      <div className="flex-1 text-[13px] leading-relaxed">
         <CitedAnswer answer={result.answer} sources={result.sources || []} onJump={onJump} />
       </div>
       {(result.sources || []).length > 0 && (
-        <div className="mt-3 pt-2 border-t border-slate-100 space-y-1">
+        <div className="mt-3 pt-3 border-t border-zinc-100 space-y-1">
           {(result.sources || []).map((src) => (
             <button
               key={src.n}
               onClick={() => onJump(src.video_id, src.start)}
-              className="flex items-center gap-1.5 text-xs text-left w-full hover:bg-slate-50 rounded px-1 py-0.5"
+              className="flex items-center gap-2 text-xs text-left w-full hover:bg-zinc-50 rounded-md px-1.5 py-1 transition-colors group"
             >
-              <span className="inline-flex items-center justify-center w-4 h-4 rounded bg-blue-100 text-blue-700 text-[10px] font-semibold flex-shrink-0">
+              <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-indigo-50 text-indigo-700 text-[10px] font-mono font-semibold flex-shrink-0">
                 {src.n}
               </span>
-              <span className="truncate text-slate-600">{src.title}</span>
-              <span className="text-blue-600 font-medium flex-shrink-0">{src.timestamp}</span>
+              <span className="truncate text-zinc-600 group-hover:text-zinc-900 flex-1">{src.title}</span>
+              <span className="text-indigo-600 font-mono text-[11px] font-medium flex-shrink-0">{src.timestamp}</span>
             </button>
           ))}
         </div>
       )}
-      {answerScores && <ScorePanel scores={answerScores} mode="Answer" />}
-      {retrievalScores && <ScorePanel scores={retrievalScores} mode="Retrieval" />}
+      {answerScores && <ScorePanel scores={answerScores} mode="Answer" strategyClass={strategyClass} />}
+      {retrievalScores && <ScorePanel scores={retrievalScores} mode="Retrieval" strategyClass={strategyClass} />}
+    </div>
+  );
+}
+
+function JudgeVerdict({ judge }) {
+  if (!judge) return null;
+  if (judge.error) {
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50/80 backdrop-blur p-3 text-sm text-amber-900 flex items-start gap-2 animate-fade-in">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-amber-500 mt-0.5 flex-shrink-0">
+          <path d="M12 9v4M12 17h.01M10.3 3.86l-8.4 14.6A2 2 0 0 0 3.6 21h16.8a2 2 0 0 0 1.7-2.5l-8.4-14.6a2 2 0 0 0-3.4 0z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+        </svg>
+        <div><span className="font-semibold">Judge error:</span> {judge.error}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-emerald-200/70 bg-gradient-to-br from-emerald-50/80 to-teal-50/80 backdrop-blur p-4 animate-fade-in">
+      <div className="flex items-center gap-2 mb-1.5">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-emerald-600">
+          <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4-6.2-4.5-6.2 4.5 2.4-7.4L2 9.4h7.6z" fill="currentColor"/>
+        </svg>
+        <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">Judge verdict · {judge.mode}</span>
+      </div>
+      {judge.mode === "both" ? (
+        <div className="space-y-2 mt-2">
+          {judge.answer && (
+            <div className="text-sm">
+              <span className="font-semibold text-zinc-900">Answer winner: </span>
+              <span className="font-mono text-emerald-700">{judge.answer.winner}</span>
+              <div className="text-xs text-zinc-600 mt-0.5">{judge.answer.reasoning}</div>
+            </div>
+          )}
+          {judge.retrieval && (
+            <div className="text-sm">
+              <span className="font-semibold text-zinc-900">Retrieval winner: </span>
+              <span className="font-mono text-emerald-700">{judge.retrieval.winner}</span>
+              <div className="text-xs text-zinc-600 mt-0.5">{judge.retrieval.reasoning}</div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div>
+          <div className="text-sm">
+            <span className="font-semibold text-zinc-900">Winner: </span>
+            <span className="font-mono text-emerald-700">{judge.winner}</span>
+          </div>
+          <div className="text-xs text-zinc-700 mt-1 leading-relaxed">{judge.reasoning}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -290,40 +510,8 @@ function CompareView({ compareData, onJump }) {
   if (!compareData) return null;
   const { results, judge } = compareData;
   return (
-    <div className="space-y-3">
-      {judge && !judge.error && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm">
-          <div className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-1">
-            Judge ({judge.mode})
-          </div>
-          {judge.mode === "both" ? (
-            <div className="space-y-1">
-              {judge.answer && (
-                <div>
-                  <span className="font-semibold">Answer winner:</span> {judge.answer.winner}
-                  <div className="text-slate-600 text-xs">{judge.answer.reasoning}</div>
-                </div>
-              )}
-              {judge.retrieval && (
-                <div>
-                  <span className="font-semibold">Retrieval winner:</span> {judge.retrieval.winner}
-                  <div className="text-slate-600 text-xs">{judge.retrieval.reasoning}</div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div>
-              <span className="font-semibold">Winner:</span> {judge.winner}
-              <div className="text-slate-600 text-xs mt-0.5">{judge.reasoning}</div>
-            </div>
-          )}
-        </div>
-      )}
-      {judge && judge.error && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
-          Judge error: {judge.error}
-        </div>
-      )}
+    <div className="space-y-3 animate-fade-in">
+      <JudgeVerdict judge={judge} />
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         {results.map((r) => (
           <StrategyColumn key={r.strategy} result={r} judge={judge} onJump={onJump} />
@@ -337,37 +525,46 @@ function SourceCard({ src, onJump }) {
   return (
     <button
       onClick={() => onJump(src.video_id, src.start)}
-      className="flex gap-3 w-full bg-white rounded-lg shadow-sm border border-slate-200 p-3 hover:shadow-md hover:border-slate-300 transition text-left"
+      className="card card-hover flex gap-3 w-full rounded-xl p-3 text-left animate-slide-up"
     >
-      <img
-        src={src.thumbnail}
-        alt=""
-        className="w-28 h-16 object-cover rounded flex-shrink-0 bg-slate-200"
-      />
-      <div className="flex-1 min-w-0">
+      <div className="relative flex-shrink-0">
+        <img src={src.thumbnail} alt="" className="w-32 h-20 object-cover rounded-lg bg-zinc-200" />
+        <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/70 backdrop-blur text-white text-[10px] font-mono font-semibold">
+          {src.timestamp}
+        </div>
+      </div>
+      <div className="flex-1 min-w-0 py-0.5">
         <div className="flex items-start gap-2">
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-blue-100 text-blue-700 text-xs font-semibold flex-shrink-0 mt-0.5">
+          <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1 rounded bg-indigo-50 text-indigo-700 text-[11px] font-mono font-semibold flex-shrink-0 mt-0.5">
             {src.n}
           </span>
-          <div className="text-sm font-medium text-slate-900 line-clamp-2">{src.title}</div>
+          <div className="text-sm font-medium text-zinc-900 line-clamp-2 leading-snug">{src.title}</div>
         </div>
-        <div className="text-xs text-slate-500 mt-1 ml-7">
-          {src.channel ? `${src.channel} · ` : ''}
-          <span className="font-medium text-blue-600">{src.timestamp}</span>
-        </div>
+        {src.channel && (
+          <div className="text-xs text-zinc-500 mt-1 ml-7 line-clamp-2">{src.channel}</div>
+        )}
+        {src.snippet && (
+          <div className="text-xs text-zinc-500 mt-1.5 ml-7 line-clamp-2 italic">"{src.snippet.slice(0, 120)}…"</div>
+        )}
       </div>
     </button>
   );
 }
 
-function Player({ currentVideo }) {
+function Player({ currentVideo, compact }) {
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden sticky top-6">
-      <div className="aspect-video bg-slate-900 relative">
+    <div className={`card rounded-xl overflow-hidden ${compact ? '' : 'sticky top-6'}`}>
+      <div className="aspect-video bg-zinc-900 relative">
         <div id="yt-player" className="w-full h-full"></div>
         {!currentVideo && (
-          <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm pointer-events-none">
-            Click a citation or source to start playback
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-500 pointer-events-none p-4">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" className="text-zinc-700 mb-2">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M10 8l6 4-6 4V8z" fill="currentColor"/>
+            </svg>
+            <div className="text-xs text-center text-zinc-400 max-w-[200px]">
+              Click a citation or source to start playback at the exact timestamp
+            </div>
           </div>
         )}
       </div>
@@ -379,27 +576,57 @@ function VideosList({ videos }) {
   const [open, setOpen] = useState(false);
   if (!videos.length) return null;
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-3 mb-6">
+    <div className="card rounded-xl p-3 mb-6 animate-slide-up">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex justify-between items-center text-xs font-semibold text-slate-600 uppercase tracking-wide"
+        className="w-full flex justify-between items-center text-xs font-semibold text-zinc-700 uppercase tracking-wider hover:text-zinc-900 transition-colors"
       >
-        <span>Indexed videos ({videos.length})</span>
-        <span>{open ? "−" : "+"}</span>
+        <span className="flex items-center gap-2">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-indigo-500">
+            <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="2"/>
+            <path d="M10 9l5 3-5 3V9z" fill="currentColor"/>
+          </svg>
+          Indexed videos
+          <span className="font-mono text-indigo-600 font-bold">{videos.length}</span>
+        </span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className={`text-zinc-400 transition-transform ${open ? 'rotate-180' : ''}`}>
+          <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
       </button>
       {open && (
-        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 animate-fade-in">
           {videos.map((v) => (
-            <div key={v.video_id} className="flex gap-2 items-center text-sm">
-              <img src={v.thumbnail} alt="" className="w-12 h-8 object-cover rounded bg-slate-200"/>
+            <div key={v.video_id} className="flex gap-2 items-center text-sm rounded-md p-1.5 hover:bg-zinc-50 transition-colors">
+              <img src={v.thumbnail} alt="" className="w-12 h-8 object-cover rounded bg-zinc-200 flex-shrink-0"/>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-slate-800">{v.title}</div>
-                {v.channel && <div className="truncate text-xs text-slate-500">{v.channel}</div>}
+                <div className="truncate text-zinc-800 text-xs font-medium">{v.title}</div>
+                {v.channel && <div className="truncate text-[11px] text-zinc-500">{v.channel}</div>}
               </div>
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function EmptyAnswerState({ hasVideos }) {
+  return (
+    <div className="card rounded-xl p-8 text-center animate-fade-in">
+      <div className="inline-flex w-12 h-12 rounded-full bg-gradient-to-br from-indigo-100 to-violet-100 items-center justify-center mb-3">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="text-indigo-600">
+          <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="2"/>
+          <path d="M21 21l-4.3-4.3" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+        </svg>
+      </div>
+      <h3 className="text-sm font-semibold text-zinc-900 mb-1">
+        {hasVideos ? "Ask anything about your indexed videos" : "Start by ingesting a playlist or video"}
+      </h3>
+      <p className="text-xs text-zinc-500 max-w-md mx-auto leading-relaxed">
+        {hasVideos
+          ? "Every answer includes inline citations that jump to the exact moment in the video. Toggle Compare mode to see how different chunking strategies perform side-by-side."
+          : "Paste any YouTube playlist or single-video URL above. Transcripts are chunked across 6 strategies so you can benchmark retrieval quality on your own content."}
+      </p>
     </div>
   );
 }
@@ -463,20 +690,16 @@ function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ question, judge_mode: judgeMode }),
         });
-        if (!r.ok) {
-          setAnswer(`Error: ${await r.text()}`);
-        } else {
-          setCompareData(await r.json());
-        }
+        if (!r.ok) setAnswer(`Error: ${await r.text()}`);
+        else setCompareData(await r.json());
       } else {
         const r = await fetch("/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ question }),
         });
-        if (!r.ok) {
-          setAnswer(`Error: ${await r.text()}`);
-        } else {
+        if (!r.ok) setAnswer(`Error: ${await r.text()}`);
+        else {
           const data = await r.json();
           setAnswer(data.answer);
           setSources(data.sources || []);
@@ -488,6 +711,8 @@ function App() {
       setLoading(false);
     }
   }, [compareMode, judgeMode]);
+
+  const showEmpty = !loading && !answer && !compareData;
 
   return (
     <div className="max-w-7xl mx-auto p-6">
@@ -505,22 +730,39 @@ function App() {
             judgeMode={judgeMode}
             setJudgeMode={setJudgeMode}
           />
-          <div className={compareMode ? "mt-4" : ""}>
-            {!compareMode && <AnswerBlock answer={answer} sources={sources} onJump={jumpTo} />}
+          <div className={compareMode ? 'mt-4' : ''}>
+            {!compareMode && answer && <AnswerBlock answer={answer} sources={sources} onJump={jumpTo} />}
             {!compareMode && sources.length > 0 && (
               <div className="space-y-2 mt-4">
-                <div className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                <div className="flex items-center gap-2 text-xs font-semibold text-zinc-700 uppercase tracking-wider mb-1">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-amber-500">
+                    <path d="M9 12l2 2 4-4M12 22s-8-4-8-12V5l8-3 8 3v5c0 8-8 12-8 12z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
                   Sources
+                  <span className="font-mono text-zinc-400">{sources.length}</span>
                 </div>
                 {sources.map((src) => (
                   <SourceCard key={src.n} src={src} onJump={jumpTo} />
                 ))}
               </div>
             )}
-            {compareMode && <CompareView compareData={compareData} onJump={jumpTo} />}
+            {compareMode && compareData && <CompareView compareData={compareData} onJump={jumpTo} />}
             {compareMode && !compareData && answer && (
-              <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mt-4 text-sm text-red-600">
+              <div className="card rounded-xl p-4 mt-4 text-sm text-red-600 flex items-start gap-2 animate-fade-in">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-red-500 mt-0.5 flex-shrink-0">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+                  <path d="M12 8v4M12 16h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                </svg>
                 {answer}
+              </div>
+            )}
+            {showEmpty && <EmptyAnswerState hasVideos={stats.videos > 0} />}
+            {loading && (
+              <div className="card rounded-xl p-6 mt-4 flex items-center justify-center gap-3 text-sm text-zinc-500 animate-fade-in">
+                <Spinner size={18} />
+                <span className="animate-pulse-soft">
+                  {compareMode ? `Querying all 6 strategies and running the ${judgeMode} judge…` : "Searching and reasoning…"}
+                </span>
               </div>
             )}
           </div>
@@ -533,13 +775,13 @@ function App() {
       </div>
 
       {compareMode && (
-        <div className="fixed bottom-4 right-4 w-80 z-10 shadow-2xl">
-          <Player currentVideo={currentVideo} />
+        <div className="fixed bottom-4 right-4 w-80 z-20 shadow-2xl rounded-xl overflow-hidden animate-fade-in">
+          <Player currentVideo={currentVideo} compact />
         </div>
       )}
 
-      <footer className="text-center text-xs text-slate-400 mt-12">
-        YouTube RAG · local demo
+      <footer className="text-center text-xs text-zinc-400 mt-16 pb-4">
+        Built with FastAPI · React · Chroma · 6 chunking strategies · LLM judge
       </footer>
     </div>
   );

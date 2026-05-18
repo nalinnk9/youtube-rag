@@ -82,9 +82,15 @@ Optional:
 # Linux / macOS
 bash run.sh
 
-# or directly
-uvicorn backend.main:app --reload --port 8000
+# or directly (cross-platform — works on Windows too)
+python -m uvicorn backend.main:app --reload --port 8000
 ```
+
+> On Windows, prefer `python -m uvicorn …` over `uvicorn …`. The bare `uvicorn`
+> entry point on Windows doesn't put the project root on `sys.path`, so the
+> `backend` package can't be imported. `python -m uvicorn` runs uvicorn as a
+> module and adds the cwd to `sys.path` automatically. Alternatively, pass
+> `--app-dir .` or set `$env:PYTHONPATH = "."`.
 
 Open **http://localhost:8000** in your browser.
 

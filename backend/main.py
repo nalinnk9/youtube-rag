@@ -11,8 +11,10 @@ from .ingest import ingest_playlist
 from .pipeline.chunking_strategies import collection_name_for
 from .pipeline.compare import ask_compare
 from .pipeline.generation import generate_answer
+from .pipeline.judge import judge_visuals
 from .pipeline.retrieval import rerank, retrieve
 from .pipeline.vectorstore import get_collection
+from .pipeline.visuals import generate_visuals
 
 
 def _startup_check():
@@ -56,6 +58,12 @@ class IngestRequest(BaseModel):
     url: str
 
 
+class VisualizeRequest(BaseModel):
+    question: str
+    strategy: str | None = None
+    judge: bool = False
+
+
 @app.post("/ask")
 def ask(req: AskRequest):
     q = req.question.strip()
@@ -72,6 +80,31 @@ def ask(req: AskRequest):
     hits = retrieve(coll, q, _oai, k=settings.top_k_retrieve)
     ranked = rerank(q, hits, top_n=settings.top_k_rerank)
     return generate_answer(q, ranked)
+
+
+@app.post("/visualize")
+def visualize(req: VisualizeRequest):
+    q = req.question.strip()
+    if not q:
+        raise HTTPException(400, "question cannot be empty")
+    if _oai is None:
+        raise HTTPException(500, "OPENAI_API_KEY not configured")
+
+    strategy = req.strategy or settings.default_strategy
+    if strategy not in settings.strategy_list:
+        raise HTTPException(400, f"unknown strategy: {strategy}")
+
+    coll = get_collection(settings.chroma_path, collection_name_for(strategy))
+    hits = retrieve(coll, q, _oai, k=settings.top_k_retrieve)
+    ranked = rerank(q, hits, top_n=settings.top_k_rerank)
+
+    out = generate_visuals(q, ranked)
+    if req.judge and out.get("visuals"):
+        try:
+            out["judge"] = judge_visuals(q, out["visuals"], ranked)
+        except Exception as e:
+            out["judge"] = {"mode": "visuals", "error": f"{type(e).__name__}: {e}"}
+    return out
 
 
 @app.post("/ask_compare")

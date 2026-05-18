@@ -15,19 +15,36 @@ def format_timestamp(seconds: float) -> str:
 
 
 def _build_prompt(question: str, hits: list[dict]) -> tuple[str, str]:
-    system = (
-        "You answer questions strictly from the provided video transcript snippets. "
+    has_pdf = any((h.get("source_type") or "youtube") == "pdf" for h in hits)
+    base = (
+        "You answer questions strictly from the provided snippets. "
         "Every factual claim must be followed by a citation marker like [1] or [2] "
         "matching the snippet numbers. Prefer concise, direct answers. "
         "If the snippets do not contain an answer, say exactly: "
-        '"The indexed videos don\'t cover this." Do not guess.'
+        '"The indexed library doesn\'t cover this." Do not guess.'
     )
+    paper_addendum = (
+        "\n\nSome snippets are from research papers. For paper snippets: prefer direct "
+        "quotes for empirical claims (numbers, results, definitions); never extrapolate "
+        "beyond what the paper explicitly states; preserve technical terms and equations "
+        "verbatim; if you summarize a method, label it as such."
+    ) if has_pdf else ""
+    system = base + paper_addendum
+
     context_blocks = []
     for i, h in enumerate(hits, start=1):
-        ts = format_timestamp(h["start"])
-        context_blocks.append(
-            f"[{i}] Video: \"{h['title']}\" (starts at {ts})\n{h['text']}"
-        )
+        if (h.get("source_type") or "youtube") == "pdf":
+            section = h.get("section", "") or ""
+            page = int(h.get("start") or 1)
+            sec_part = f", §{section}" if section else ""
+            context_blocks.append(
+                f"[{i}] Paper: \"{h.get('title','Untitled')}\" (p. {page}{sec_part})\n{h.get('text','')}"
+            )
+        else:
+            ts = format_timestamp(h.get("start") or 0)
+            context_blocks.append(
+                f"[{i}] Video: \"{h.get('title','Untitled')}\" (starts at {ts})\n{h.get('text','')}"
+            )
     context = "\n\n".join(context_blocks)
     user = f"Question: {question}\n\nSnippets:\n{context}"
     return system, user
@@ -68,6 +85,44 @@ def call_llm(system: str, user: str, max_tokens: int = 800) -> str:
     raise ValueError(f"Unknown LLM_PROVIDER: {settings.llm_provider!r}")
 
 
+def _source_from_pdf_hit(n: int, h: dict) -> dict:
+    page = int(h.get("start") or 1)
+    doc_id = h.get("doc_id", "")
+    return {
+        "n": n,
+        "source_type": "pdf",
+        "doc_id": doc_id,
+        "title": h.get("title", "Untitled document"),
+        "authors": h.get("authors", ""),
+        "section": h.get("section", ""),
+        "page": page,
+        "start": page,
+        "end": int(h.get("end") or page),
+        "page_label": f"p. {page}",
+        "url": f"/pdf_view?doc_id={doc_id}#page={page}" if doc_id else "",
+        "thumbnail": f"/pdf_page?doc_id={doc_id}&page={page}" if doc_id else "",
+        "snippet": h.get("text", ""),
+    }
+
+
+def _source_from_youtube_hit(n: int, h: dict) -> dict:
+    start = int(h.get("start") or 0)
+    video_id = h.get("video_id", "")
+    return {
+        "n": n,
+        "source_type": "youtube",
+        "video_id": video_id,
+        "title": h.get("title", "Untitled"),
+        "channel": h.get("channel", ""),
+        "start": start,
+        "end": int(h.get("end") or start),
+        "timestamp": format_timestamp(h.get("start") or 0),
+        "thumbnail": f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
+        "url": f"https://youtube.com/watch?v={video_id}&t={start}s",
+        "snippet": h.get("text", ""),
+    }
+
+
 def build_sources_from_citations(text: str, hits: list[dict]) -> list[dict]:
     """Parse [n] markers out of `text` and resolve them to source dicts for the UI.
 
@@ -80,19 +135,10 @@ def build_sources_from_citations(text: str, hits: list[dict]) -> list[dict]:
     for n in cited_numbers:
         if 1 <= n <= len(hits):
             h = hits[n - 1]
-            start = int(h["start"])
-            sources.append({
-                "n": n,
-                "video_id": h["video_id"],
-                "title": h["title"],
-                "channel": h.get("channel", ""),
-                "start": start,
-                "end": int(h["end"]),
-                "timestamp": format_timestamp(h["start"]),
-                "thumbnail": f"https://img.youtube.com/vi/{h['video_id']}/hqdefault.jpg",
-                "url": f"https://youtube.com/watch?v={h['video_id']}&t={start}s",
-                "snippet": h["text"],
-            })
+            if (h.get("source_type") or "youtube") == "pdf":
+                sources.append(_source_from_pdf_hit(n, h))
+            else:
+                sources.append(_source_from_youtube_hit(n, h))
     return sources
 
 
@@ -100,7 +146,7 @@ def generate_answer(question: str, hits: list[dict]) -> dict:
     """Given a question and a list of retrieved hits, produce a cited answer."""
     if not hits:
         return {
-            "answer": "The indexed videos don't cover this (no relevant snippets found).",
+            "answer": "The indexed library doesn't cover this (no relevant snippets found).",
             "sources": [],
         }
 

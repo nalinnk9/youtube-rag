@@ -8,6 +8,7 @@ from ...config import settings
 from .fixed_time import chunk_fixed_time
 from .parent_child import chunk_parent_child
 from .recursive_token import chunk_recursive_token
+from .section_aware import chunk_section_aware
 from .semantic import chunk_semantic
 from .sentence_window import chunk_sentence_window
 from .sliding_window import chunk_sliding_window
@@ -54,6 +55,14 @@ def _parent_child(segments):
     )
 
 
+def _section_aware(segments):
+    return chunk_section_aware(
+        segments,
+        max_chars=settings.section_max_chars,
+        min_chars=settings.section_min_chars,
+    )
+
+
 STRATEGIES: dict[str, Callable[[list[dict]], list[dict]]] = {
     "sliding_window": _sliding_window,
     "recursive_token": _recursive_token,
@@ -61,11 +70,26 @@ STRATEGIES: dict[str, Callable[[list[dict]], list[dict]]] = {
     "semantic": _semantic,
     "fixed_time": _fixed_time,
     "parent_child": _parent_child,
+    "section_aware": _section_aware,
 }
+
+# Some strategies only make sense for certain source types. `fixed_time` requires
+# real-valued timestamps; `section_aware` requires a `section` field on each
+# segment. The ingest orchestrator filters strategies via this table.
+SOURCE_STRATEGIES: dict[str, list[str]] = {
+    "youtube": ["sliding_window", "recursive_token", "sentence_window", "semantic", "fixed_time", "parent_child"],
+    "pdf":     ["sliding_window", "recursive_token", "sentence_window", "semantic", "parent_child", "section_aware"],
+}
+
+
+def strategies_for_source(source_type: str) -> list[str]:
+    enabled = set(settings.strategy_list)
+    allowed = SOURCE_STRATEGIES.get(source_type, list(STRATEGIES.keys()))
+    return [s for s in allowed if s in enabled]
 
 
 def collection_name_for(strategy: str, base: str = "videos") -> str:
     return f"{base}_{strategy}"
 
 
-__all__ = ["STRATEGIES", "collection_name_for"]
+__all__ = ["STRATEGIES", "SOURCE_STRATEGIES", "strategies_for_source", "collection_name_for"]

@@ -1,17 +1,21 @@
 """FastAPI app exposing the ingestion + query pipeline and serving the frontend."""
 import os
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel
 
 from .config import settings
 from .ingest import ingest_playlist
+from .ingest_pdf import ingest_pdf_file
 from .pipeline.chunking_strategies import collection_name_for
 from .pipeline.compare import ask_compare
 from .pipeline.generation import generate_answer
 from .pipeline.judge import judge_visuals
+from .pipeline.pdf import available_extractors as _available_extractors
+from .pipeline.pdf import render_page as _render_pdf_page
 from .pipeline.retrieval import rerank, retrieve
 from .pipeline.vectorstore import get_collection
 from .pipeline.visuals import generate_visuals
@@ -142,6 +146,93 @@ def ingest(req: IngestRequest, bg: BackgroundTasks):
         raise HTTPException(400, "url cannot be empty")
     bg.add_task(ingest_playlist, req.url)
     return {"status": "started", "url": req.url, "hint": "check the server terminal for progress"}
+
+
+@app.get("/extractors")
+def list_extractors():
+    return {"extractors": _available_extractors()}
+
+
+@app.post("/ingest_pdf")
+async def ingest_pdf(
+    file: UploadFile = File(...),
+    extractor: str = Form(default=""),
+):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "only .pdf files are accepted")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "uploaded file is empty")
+    if len(raw) > settings.pdf_max_bytes:
+        raise HTTPException(413, f"file exceeds {settings.pdf_max_bytes} bytes")
+
+    chosen = (extractor or settings.pdf_default_extractor).lower()
+    valid = {e["name"] for e in _available_extractors() if e["available"]}
+    if chosen not in valid:
+        raise HTTPException(400, f"extractor '{chosen}' is not available. Available: {sorted(valid)}")
+
+    try:
+        result = ingest_pdf_file(raw, file.filename, extractor=chosen)
+    except ImportError as e:
+        raise HTTPException(400, str(e))
+    return result
+
+
+@app.get("/pdf_page")
+def pdf_page(doc_id: str, page: int = 1):
+    doc_coll = get_collection(settings.chroma_path, "documents")
+    res = doc_coll.get(ids=[doc_id])
+    if not res.get("ids"):
+        raise HTTPException(404, f"unknown doc_id: {doc_id}")
+    path = (res.get("metadatas") or [{}])[0].get("path")
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "PDF file missing on disk")
+
+    os.makedirs(settings.pdf_renders_dir, exist_ok=True)
+    cache_dir = os.path.join(settings.pdf_renders_dir, doc_id)
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f"page-{page}.png")
+
+    if not os.path.exists(cache_path):
+        try:
+            png = _render_pdf_page(path, page, scale=settings.pdf_render_scale)
+        except Exception as e:
+            raise HTTPException(500, f"render failed: {type(e).__name__}: {e}")
+        with open(cache_path, "wb") as f:
+            f.write(png)
+    return FileResponse(cache_path, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/pdf_view")
+def pdf_view(doc_id: str):
+    """Serve the raw PDF for in-browser viewing (uses #page=N anchor)."""
+    doc_coll = get_collection(settings.chroma_path, "documents")
+    res = doc_coll.get(ids=[doc_id])
+    if not res.get("ids"):
+        raise HTTPException(404, f"unknown doc_id: {doc_id}")
+    path = (res.get("metadatas") or [{}])[0].get("path")
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "PDF file missing on disk")
+    return FileResponse(path, media_type="application/pdf")
+
+
+@app.get("/documents")
+def list_documents():
+    doc_coll = get_collection(settings.chroma_path, "documents")
+    all_ = doc_coll.get()
+    docs = []
+    for i, _id in enumerate(all_.get("ids") or []):
+        m = (all_.get("metadatas") or [])[i] or {}
+        docs.append({
+            "doc_id": _id,
+            "title": m.get("title", "Untitled"),
+            "authors": m.get("authors", ""),
+            "num_pages": m.get("num_pages", 0),
+            "extractor": m.get("extractor", ""),
+            "num_assets": m.get("num_assets", 0),
+            "original_name": m.get("original_name", ""),
+        })
+    return {"documents": docs}
 
 
 @app.get("/stats")

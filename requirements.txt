@@ -4,6 +4,7 @@ pydantic>=2.6.0
 pydantic-settings>=2.2.0
 python-dotenv>=1.0.0
 httpx>=0.27.0
+python-multipart>=0.0.9   # required by FastAPI for multipart file uploads
 
 # Vector DB
 chromadb>=0.5.0
@@ -22,6 +23,12 @@ faster-whisper>=1.0.0
 
 # Tokenizer for token-aware chunking
 tiktoken>=0.7.0
+
+# PDF extraction
+pypdfium2>=4.30.0
+# marker-pdf is OPTIONAL — install only if you want LLM-quality PDF extraction.
+# It pulls multi-GB model weights on first run. Uncomment to enable:
+# marker-pdf>=0.2.17
 
 # Utilities
 tqdm>=4.66.0

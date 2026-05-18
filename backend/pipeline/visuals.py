@@ -13,11 +13,11 @@ import re
 from .generation import build_sources_from_citations, call_llm, format_timestamp
 
 
-_SYSTEM = (
+_SYSTEM_BASE = (
     "You are a learning-content designer. From the user's question and the provided "
-    "video transcript snippets, produce 2 to 4 structured visual elements that help "
-    "explain the answer. Visuals MUST derive from the snippets — never invent facts "
-    "or details that aren't supported there.\n\n"
+    "snippets, produce 2 to 4 structured visual elements that help explain the "
+    "answer. Visuals MUST derive from the snippets — never invent facts or details "
+    "that aren't supported there.\n\n"
     "Output STRICT JSON in this exact shape:\n"
     "{\n"
     "  \"visuals\": [\n"
@@ -38,12 +38,40 @@ _SYSTEM = (
     "- Return ONLY the JSON object — no prose, no markdown fence around the JSON."
 )
 
+_PAPER_ADDENDUM = (
+    "\n\nIMPORTANT: some or all snippets are from research papers. Treat them as "
+    "primary sources and apply these stricter rules:\n"
+    "- Reproduce numerical results, percentages, and equations EXACTLY as written.\n"
+    "- Use direct quotes for empirical claims; mark them with quotation marks.\n"
+    "- Do NOT extrapolate, infer, or speculate beyond the paper's explicit statements.\n"
+    "- Comparison tables must mirror only comparisons the paper itself makes (do not invent new comparisons across rows).\n"
+    "- Mermaid diagrams may only depict architectures or flows the paper explicitly describes or illustrates. Use the paper's own labels.\n"
+    "- If a section/page is provided next to a snippet, prefer citing snippets that come from the most specific section for the question (e.g., Methods for 'how does X work', Results for 'what did they find').\n"
+    "- Concept cards for definitions must include the term as it appears in the paper.\n"
+    "- If you cannot back up a visual with a direct quote or paraphrase tightly anchored to a snippet, OMIT that visual."
+)
+
+
+def _build_system(hits: list[dict]) -> str:
+    has_pdf = any((h.get("source_type") or "youtube") == "pdf" for h in hits)
+    return _SYSTEM_BASE + (_PAPER_ADDENDUM if has_pdf else "")
+
 
 def _format_user(question: str, hits: list[dict]) -> str:
     blocks = []
     for i, h in enumerate(hits, start=1):
-        ts = format_timestamp(h["start"])
-        blocks.append(f"[{i}] Video: \"{h['title']}\" (at {ts})\n{h['text']}")
+        if (h.get("source_type") or "youtube") == "pdf":
+            section = h.get("section", "") or ""
+            page = int(h.get("start") or 1)
+            sec_part = f", §{section}" if section else ""
+            blocks.append(
+                f"[{i}] Paper: \"{h.get('title','Untitled')}\" (p. {page}{sec_part})\n{h.get('text','')}"
+            )
+        else:
+            ts = format_timestamp(h.get("start") or 0)
+            blocks.append(
+                f"[{i}] Video: \"{h.get('title','Untitled')}\" (at {ts})\n{h.get('text','')}"
+            )
     return f"Question: {question}\n\nSnippets:\n" + "\n\n".join(blocks)
 
 
@@ -121,8 +149,9 @@ def generate_visuals(question: str, hits: list[dict]) -> dict:
     if not hits:
         return {"visuals": [], "sources": []}
 
+    system = _build_system(hits)
     user = _format_user(question, hits)
-    raw = call_llm(_SYSTEM, user, max_tokens=2000)
+    raw = call_llm(system, user, max_tokens=2000)
 
     try:
         parsed = _parse_json(raw)

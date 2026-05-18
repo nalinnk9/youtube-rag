@@ -3,7 +3,7 @@ from openai import OpenAI
 from tqdm import tqdm
 
 from .config import settings
-from .pipeline.chunking_strategies import STRATEGIES, collection_name_for
+from .pipeline.chunking_strategies import STRATEGIES, collection_name_for, strategies_for_source
 from .pipeline.transcripts import get_segments
 from .pipeline.vectorstore import embed_batch, get_collection
 from .playlist import get_playlist_videos
@@ -28,6 +28,7 @@ def _ingest_strategy(coll, oai: OpenAI, video: dict, segments: list[dict], strat
     metas = []
     for c in chunks:
         meta = {
+            "source_type": "youtube",
             "video_id": vid,
             "title": video["title"],
             "channel": video.get("channel", ""),
@@ -46,7 +47,7 @@ def _ingest_strategy(coll, oai: OpenAI, video: dict, segments: list[dict], strat
 
 def ingest_video(video: dict, oai: OpenAI, strategies: list[str] | None = None) -> dict:
     """Ingest one video under each enabled strategy. Returns per-strategy chunk counts."""
-    strategies = strategies or settings.strategy_list
+    strategies = strategies or strategies_for_source("youtube")
     counts: dict[str, int] = {}
 
     # Skip the transcript fetch entirely if every strategy already has this video

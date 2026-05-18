@@ -295,7 +295,7 @@ function Logo() {
   );
 }
 
-function Header({ stats, onRefresh }) {
+function Header({ stats, docCount, onRefresh }) {
   return (
     <header className="mb-6 flex items-center justify-between animate-fade-in">
       <Logo />
@@ -307,7 +307,10 @@ function Header({ stats, onRefresh }) {
         <span className="font-mono text-indigo-600">{stats.videos}</span>
         <span className="text-zinc-500">video{stats.videos === 1 ? '' : 's'}</span>
         <span className="text-zinc-300">·</span>
-        <span className="font-mono text-violet-600">{stats.chunks}</span>
+        <span className="font-mono text-violet-600">{docCount}</span>
+        <span className="text-zinc-500">paper{docCount === 1 ? '' : 's'}</span>
+        <span className="text-zinc-300">·</span>
+        <span className="font-mono text-pink-600">{stats.chunks}</span>
         <span className="text-zinc-500">chunks</span>
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="text-zinc-400 group-hover:text-indigo-500 group-hover:rotate-180 transition-transform duration-500">
           <path d="M4 4v6h6M20 20v-6h-6M4 10a8 8 0 0 1 14-3M20 14a8 8 0 0 1-14 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -317,12 +320,41 @@ function Header({ stats, onRefresh }) {
   );
 }
 
-function IngestPanel({ onIngested }) {
-  const [url, setUrl] = useState("");
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
+function TabButton({ active, onClick, label, icon }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wider transition-all ${
+        active
+          ? 'bg-white text-indigo-700 shadow-sm border border-indigo-100'
+          : 'text-zinc-500 hover:text-zinc-800 border border-transparent'
+      }`}
+    >
+      {icon}{label}
+    </button>
+  );
+}
 
-  const submit = async () => {
+function IngestPanel({ onIngested }) {
+  const [tab, setTab] = useState("youtube");
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef(null);
+  const [pdfFile, setPdfFile] = useState(null);
+  const [extractors, setExtractors] = useState([]);
+  const [extractor, setExtractor] = useState("pypdfium2");
+  const [dragOver, setDragOver] = useState(false);
+
+  useEffect(() => {
+    fetch("/extractors").then(r => r.json()).then(d => {
+      setExtractors(d.extractors || []);
+      const def = (d.extractors || []).find(e => e.default && e.available) || (d.extractors || []).find(e => e.available);
+      if (def) setExtractor(def.name);
+    }).catch(() => {});
+  }, []);
+
+  const submitUrl = async () => {
     const trimmed = url.trim();
     if (!trimmed) return;
     setBusy(true);
@@ -335,11 +367,45 @@ function IngestPanel({ onIngested }) {
       });
       setUrl("");
       setTimeout(onIngested, 3000);
-      setTimeout(() => { onIngested(); setBusy(false); }, 15000);
+      setTimeout(() => { onIngested(); setBusy(false); setMsg(""); }, 15000);
     } catch (e) {
       setMsg(`Error: ${e.message}`);
       setBusy(false);
     }
+  };
+
+  const submitPdf = async () => {
+    if (!pdfFile) return;
+    setBusy(true);
+    setMsg(`Uploading and ingesting "${pdfFile.name}" with ${extractor}…`);
+    const fd = new FormData();
+    fd.append("file", pdfFile);
+    fd.append("extractor", extractor);
+    try {
+      const r = await fetch("/ingest_pdf", { method: "POST", body: fd });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg(`Error: ${data.detail || r.statusText}`);
+      } else {
+        const total = data.total_chunks || 0;
+        const strats = Object.entries(data.by_strategy || {}).map(([s, n]) => `${s}:${n}`).join(', ');
+        setMsg(`Indexed "${data.title}" — ${total} chunks (${strats}). ${data.num_assets || 0} figures/tables extracted.`);
+        setPdfFile(null);
+        if (fileRef.current) fileRef.current.value = "";
+        onIngested();
+      }
+    } catch (e) {
+      setMsg(`Error: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f && f.name.toLowerCase().endsWith(".pdf")) setPdfFile(f);
   };
 
   return (
@@ -349,27 +415,108 @@ function IngestPanel({ onIngested }) {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-indigo-500">
             <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/>
           </svg>
-          Ingest a playlist or video
+          Add to library
         </label>
+        <div className="flex items-center bg-zinc-100/80 rounded-lg p-0.5">
+          <TabButton
+            active={tab === "youtube"}
+            onClick={() => setTab("youtube")}
+            label="YouTube"
+            icon={<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M10 8l6 4-6 4V8z"/></svg>}
+          />
+          <TabButton
+            active={tab === "pdf"}
+            onClick={() => setTab("pdf")}
+            label="PDF"
+            icon={<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="2"/><path d="M14 2v6h6" stroke="currentColor" strokeWidth="2"/></svg>}
+          />
+        </div>
       </div>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="https://youtube.com/playlist?list=…   or   https://youtu.be/…"
-          className="flex-1 px-4 py-2.5 bg-white border border-zinc-200 rounded-lg text-sm placeholder:text-zinc-400 focus:border-indigo-400 focus:bg-white transition-colors"
-        />
-        <button
-          onClick={submit}
-          disabled={busy || !url.trim()}
-          className="px-5 py-2.5 bg-zinc-900 text-white rounded-lg text-sm font-medium hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] flex items-center gap-2"
-        >
-          {busy && <Spinner size={14} />}
-          {busy ? "Ingesting" : "Ingest"}
-        </button>
-      </div>
+
+      {tab === "youtube" && (
+        <div className="flex gap-2 animate-fade-in">
+          <input
+            type="text"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitUrl()}
+            placeholder="https://youtube.com/playlist?list=…   or   https://youtu.be/…"
+            className="flex-1 px-4 py-2.5 bg-white border border-zinc-200 rounded-lg text-sm placeholder:text-zinc-400 focus:border-indigo-400 focus:bg-white transition-colors"
+          />
+          <button
+            onClick={submitUrl}
+            disabled={busy || !url.trim()}
+            className="px-5 py-2.5 bg-zinc-900 text-white rounded-lg text-sm font-medium hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] flex items-center gap-2"
+          >
+            {busy && <Spinner size={14} />}
+            {busy ? "Ingesting" : "Ingest"}
+          </button>
+        </div>
+      )}
+
+      {tab === "pdf" && (
+        <div className="space-y-3 animate-fade-in">
+          <div
+            onClick={() => fileRef.current && fileRef.current.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            className={`cursor-pointer border-2 border-dashed rounded-lg px-4 py-6 text-center transition-all ${
+              dragOver ? 'border-indigo-400 bg-indigo-50/40' : 'border-zinc-200 hover:border-indigo-300 hover:bg-indigo-50/20'
+            }`}
+          >
+            <input
+              type="file"
+              ref={fileRef}
+              accept="application/pdf,.pdf"
+              onChange={(e) => setPdfFile(e.target.files && e.target.files[0])}
+              className="hidden"
+            />
+            {pdfFile ? (
+              <div className="text-sm text-zinc-800">
+                <span className="font-medium">{pdfFile.name}</span>
+                <span className="text-zinc-400 ml-2">({(pdfFile.size / 1024 / 1024).toFixed(1)} MB)</span>
+              </div>
+            ) : (
+              <div>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" className="mx-auto text-indigo-400 mb-2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                <div className="text-sm text-zinc-700 font-medium">Drop a research paper or click to browse</div>
+                <div className="text-xs text-zinc-400 mt-1">PDF up to 50 MB</div>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-xs font-semibold uppercase tracking-wider text-zinc-600">Extractor</label>
+            <select
+              value={extractor}
+              onChange={(e) => setExtractor(e.target.value)}
+              className="bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:border-indigo-300 transition-colors cursor-pointer"
+            >
+              {extractors.map((e) => (
+                <option key={e.name} value={e.name} disabled={!e.available}>
+                  {e.label}{e.available ? "" : " — not installed"}
+                </option>
+              ))}
+            </select>
+            {extractors.find((e) => e.name === extractor) && (
+              <div className="text-[11px] text-zinc-500 flex-1 min-w-[200px]">
+                {extractors.find((e) => e.name === extractor).description}
+              </div>
+            )}
+            <button
+              onClick={submitPdf}
+              disabled={busy || !pdfFile}
+              className="px-5 py-2 bg-zinc-900 text-white rounded-lg text-sm font-medium hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] flex items-center gap-2"
+            >
+              {busy && <Spinner size={14} />}
+              {busy ? "Ingesting" : "Ingest PDF"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {msg && (
         <div className="mt-3 flex items-start gap-2 text-xs text-zinc-600 animate-fade-in">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-indigo-500 mt-0.5 flex-shrink-0">
@@ -514,7 +661,12 @@ function CitedAnswer({ answer, sources, onJump, compact = false }) {
       if (!btn) return;
       const n = parseInt(btn.getAttribute('data-cite'), 10);
       const src = (sources || []).find((s) => s.n === n);
-      if (src) onJump(src.video_id, src.start);
+      if (!src) return;
+      if (src.source_type === "pdf") {
+        onJump({ kind: "pdf", doc_id: src.doc_id, page: src.page });
+      } else {
+        onJump({ kind: "youtube", video_id: src.video_id, start: src.start });
+      }
     },
     [sources, onJump]
   );
@@ -536,12 +688,15 @@ function CitationChips({ citations, sources, onJump }) {
       <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold">Cites</span>
       {cs.map((n) => {
         const src = sources.find((s) => s.n === n);
+        const onChipClick = () => src.source_type === "pdf"
+          ? onJump({ kind: "pdf", doc_id: src.doc_id, page: src.page })
+          : onJump({ kind: "youtube", video_id: src.video_id, start: src.start });
         return (
           <button
             key={n}
-            onClick={() => onJump(src.video_id, src.start)}
+            onClick={onChipClick}
             className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-md bg-indigo-50 text-indigo-700 text-[10.5px] font-mono font-semibold hover:bg-indigo-600 hover:text-white transition-colors"
-            title={`Jump to ${src.timestamp} in "${src.title}"`}
+            title={src.source_type === "pdf" ? `Open ${src.title} at ${src.page_label}` : `Jump to ${src.timestamp} in "${src.title}"`}
           >
             {n}
           </button>
@@ -840,14 +995,18 @@ function StrategyColumn({ result, judge, onJump }) {
           {(result.sources || []).map((src) => (
             <button
               key={src.n}
-              onClick={() => onJump(src.video_id, src.start)}
+              onClick={() => src.source_type === "pdf"
+                ? onJump({ kind: "pdf", doc_id: src.doc_id, page: src.page })
+                : onJump({ kind: "youtube", video_id: src.video_id, start: src.start })}
               className="flex items-center gap-2 text-xs text-left w-full hover:bg-zinc-50 rounded-md px-1.5 py-1 transition-colors group"
             >
               <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-indigo-50 text-indigo-700 text-[10px] font-mono font-semibold flex-shrink-0">
                 {src.n}
               </span>
               <span className="truncate text-zinc-600 group-hover:text-zinc-900 flex-1">{src.title}</span>
-              <span className="text-indigo-600 font-mono text-[11px] font-medium flex-shrink-0">{src.timestamp}</span>
+              <span className="text-indigo-600 font-mono text-[11px] font-medium flex-shrink-0">
+                {src.source_type === "pdf" ? src.page_label : src.timestamp}
+              </span>
             </button>
           ))}
         </div>
@@ -924,15 +1083,29 @@ function CompareView({ compareData, onJump }) {
 }
 
 function SourceCard({ src, onJump }) {
+  const isPdf = src.source_type === "pdf";
+  const onClick = () => isPdf ? onJump({ kind: "pdf", doc_id: src.doc_id, page: src.page }) : onJump({ kind: "youtube", video_id: src.video_id, start: src.start });
   return (
     <button
-      onClick={() => onJump(src.video_id, src.start)}
+      onClick={onClick}
       className="card card-hover flex gap-3 w-full rounded-xl p-3 text-left animate-slide-up"
     >
       <div className="relative flex-shrink-0">
-        <img src={src.thumbnail} alt="" className="w-32 h-20 object-cover rounded-lg bg-zinc-200" />
+        {isPdf ? (
+          <div className="w-32 h-20 rounded-lg overflow-hidden bg-zinc-100 border border-zinc-200 flex items-center justify-center">
+            <img
+              src={src.thumbnail}
+              alt=""
+              className="w-full h-full object-cover object-top"
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+              loading="lazy"
+            />
+          </div>
+        ) : (
+          <img src={src.thumbnail} alt="" className="w-32 h-20 object-cover rounded-lg bg-zinc-200" />
+        )}
         <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/70 backdrop-blur text-white text-[10px] font-mono font-semibold">
-          {src.timestamp}
+          {isPdf ? src.page_label : src.timestamp}
         </div>
       </div>
       <div className="flex-1 min-w-0 py-0.5">
@@ -942,7 +1115,12 @@ function SourceCard({ src, onJump }) {
           </span>
           <div className="text-sm font-medium text-zinc-900 line-clamp-2 leading-snug">{src.title}</div>
         </div>
-        {src.channel && (
+        {isPdf ? (
+          <div className="text-xs text-zinc-500 mt-1 ml-7 line-clamp-1">
+            {src.authors && <span>{src.authors}</span>}
+            {src.section && (<><span className="mx-1.5 text-zinc-300">·</span>§ {src.section}</>)}
+          </div>
+        ) : src.channel && (
           <div className="text-xs text-zinc-500 mt-1 ml-7 line-clamp-2">{src.channel}</div>
         )}
         {src.snippet && (
@@ -953,23 +1131,116 @@ function SourceCard({ src, onJump }) {
   );
 }
 
-function Player({ currentVideo, compact }) {
+function Preview({ mode, currentVideo, pdfDoc, pdfPage, compact, onChangePdfPage }) {
+  // mode: "youtube" | "pdf" | "empty"
   return (
     <div className={`card rounded-xl overflow-hidden ${compact ? '' : 'sticky top-6'}`}>
-      <div className="aspect-video bg-zinc-900 relative">
+      {/* YouTube player container is ALWAYS mounted so the YT.Player ref survives mode switches */}
+      <div className={`aspect-video bg-zinc-900 relative ${mode === 'youtube' ? '' : 'hidden'}`}>
         <div id="yt-player" className="w-full h-full"></div>
-        {!currentVideo && (
+      </div>
+
+      {mode === 'pdf' && pdfDoc && (
+        <div className="bg-zinc-50">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 bg-white/70 backdrop-blur">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => onChangePdfPage && onChangePdfPage(Math.max(1, pdfPage - 1))}
+                disabled={pdfPage <= 1}
+                className="p-1 rounded hover:bg-zinc-100 disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Previous page"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+              <span className="text-xs font-mono text-zinc-600">page {pdfPage}</span>
+              <button
+                onClick={() => onChangePdfPage && onChangePdfPage(pdfPage + 1)}
+                className="p-1 rounded hover:bg-zinc-100"
+                title="Next page"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+            </div>
+            <a
+              href={`/pdf_view?doc_id=${encodeURIComponent(pdfDoc)}#page=${pdfPage}`}
+              target="_blank"
+              rel="noopener"
+              className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+              title="Open the full PDF in a new tab"
+            >
+              Open PDF ↗
+            </a>
+          </div>
+          <div className="max-h-[60vh] overflow-auto p-2 flex items-start justify-center bg-zinc-100">
+            <img
+              key={`${pdfDoc}-${pdfPage}`}
+              src={`/pdf_page?doc_id=${encodeURIComponent(pdfDoc)}&page=${pdfPage}`}
+              alt={`Page ${pdfPage}`}
+              className="max-w-full shadow-md rounded-sm bg-white"
+              loading="eager"
+            />
+          </div>
+        </div>
+      )}
+
+      {mode === 'empty' && (
+        <div className="aspect-video bg-zinc-900 relative">
           <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-500 pointer-events-none p-4">
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" className="text-zinc-700 mb-2">
               <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5"/>
               <path d="M10 8l6 4-6 4V8z" fill="currentColor"/>
             </svg>
             <div className="text-xs text-center text-zinc-400 max-w-[200px]">
-              Click a citation or source to start playback at the exact timestamp
+              Click a citation or source to view it here
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DocumentsList({ documents, onOpen }) {
+  const [open, setOpen] = useState(false);
+  if (!documents.length) return null;
+  return (
+    <div className="card rounded-xl p-3 mb-6 animate-slide-up">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex justify-between items-center text-xs font-semibold text-zinc-700 uppercase tracking-wider hover:text-zinc-900 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-violet-500">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="2"/>
+            <path d="M14 2v6h6M9 13h6M9 17h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+          Indexed papers
+          <span className="font-mono text-violet-600 font-bold">{documents.length}</span>
+        </span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className={`text-zinc-400 transition-transform ${open ? 'rotate-180' : ''}`}>
+          <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
+      {open && (
+        <div className="mt-3 space-y-1.5 animate-fade-in">
+          {documents.map((d) => (
+            <button
+              key={d.doc_id}
+              onClick={() => onOpen && onOpen(d.doc_id, 1)}
+              className="flex gap-3 items-center text-sm rounded-md p-2 hover:bg-zinc-50 transition-colors w-full text-left"
+            >
+              <div className="w-12 h-14 rounded bg-gradient-to-br from-violet-100 to-indigo-100 flex items-center justify-center flex-shrink-0 border border-violet-200/50">
+                <span className="text-[9px] font-mono font-bold text-violet-700">{d.num_pages}p</span>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-zinc-800 text-xs font-medium">{d.title}</div>
+                {d.authors && <div className="truncate text-[11px] text-zinc-500">{d.authors}</div>}
+                <div className="text-[10px] text-zinc-400 mt-0.5 font-mono">{d.extractor}{d.num_assets > 0 && ` · ${d.num_assets} assets`}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1040,7 +1311,11 @@ function App() {
   const [compareData, setCompareData] = useState(null);
   const [stats, setStats] = useState({ videos: 0, chunks: 0 });
   const [videos, setVideos] = useState([]);
+  const [documents, setDocuments] = useState([]);
   const [currentVideo, setCurrentVideo] = useState(null);
+  const [previewMode, setPreviewMode] = useState("empty");  // "empty" | "youtube" | "pdf"
+  const [pdfDoc, setPdfDoc] = useState(null);
+  const [pdfPage, setPdfPage] = useState(1);
   const [compareMode, setCompareMode] = useState(false);
   const [judgeMode, setJudgeMode] = useState("answer");
   const [visuals, setVisuals] = useState(null);
@@ -1053,19 +1328,37 @@ function App() {
 
   const refreshStats = useCallback(async () => {
     try {
-      const [s, v] = await Promise.all([
+      const [s, v, d] = await Promise.all([
         fetch("/stats").then((r) => r.json()),
         fetch("/videos").then((r) => r.json()),
+        fetch("/documents").then((r) => r.json()).catch(() => ({ documents: [] })),
       ]);
       setStats(s);
       setVideos(v);
+      setDocuments(d.documents || []);
     } catch (e) { /* ignore */ }
   }, []);
 
   useEffect(() => { refreshStats(); }, [refreshStats]);
 
-  const jumpTo = useCallback((videoId, seconds) => {
-    const start = Math.floor(seconds);
+  // Unified jump: handles both legacy (videoId, seconds) calls and the new
+  // {kind:'youtube'|'pdf', ...} target shape used by source cards.
+  const jumpTo = useCallback((targetOrVideoId, maybeSeconds) => {
+    const target = (typeof targetOrVideoId === "object" && targetOrVideoId !== null)
+      ? targetOrVideoId
+      : { kind: "youtube", video_id: targetOrVideoId, start: maybeSeconds };
+
+    if (target.kind === "pdf") {
+      setPdfDoc(target.doc_id);
+      setPdfPage(target.page || 1);
+      setPreviewMode("pdf");
+      return;
+    }
+
+    // youtube path
+    const videoId = target.video_id;
+    const start = Math.floor(target.start || 0);
+    setPreviewMode("youtube");
     if (!ytReady) return;
     if (!playerRef.current) {
       playerRef.current = new window.YT.Player("yt-player", {
@@ -1146,9 +1439,10 @@ function App() {
 
   return (
     <div className="max-w-7xl mx-auto p-6">
-      <Header stats={stats} onRefresh={refreshStats} />
+      <Header stats={stats} docCount={documents.length} onRefresh={refreshStats} />
       <IngestPanel onIngested={refreshStats} />
       <VideosList videos={videos} />
+      <DocumentsList documents={documents} onOpen={(doc_id, page) => jumpTo({ kind: "pdf", doc_id, page })} />
 
       <div className={`grid grid-cols-1 ${compareMode ? '' : 'lg:grid-cols-5'} gap-6`}>
         <div className={compareMode ? '' : 'lg:col-span-3 space-y-4'}>
@@ -1201,7 +1495,7 @@ function App() {
                 {answer}
               </div>
             )}
-            {showEmpty && <EmptyAnswerState hasVideos={stats.videos > 0} />}
+            {showEmpty && <EmptyAnswerState hasVideos={stats.videos > 0 || documents.length > 0} />}
             {loading && (
               <div className="card rounded-xl p-6 mt-4 flex items-center justify-center gap-3 text-sm text-zinc-500 animate-fade-in">
                 <Spinner size={18} />
@@ -1214,19 +1508,32 @@ function App() {
         </div>
         {!compareMode && (
           <div className="lg:col-span-2">
-            <Player currentVideo={currentVideo} />
+            <Preview
+              mode={previewMode}
+              currentVideo={currentVideo}
+              pdfDoc={pdfDoc}
+              pdfPage={pdfPage}
+              onChangePdfPage={(p) => setPdfPage(p)}
+            />
           </div>
         )}
       </div>
 
       {compareMode && (
         <div className="fixed bottom-4 right-4 w-80 z-20 shadow-2xl rounded-xl overflow-hidden animate-fade-in">
-          <Player currentVideo={currentVideo} compact />
+          <Preview
+            mode={previewMode}
+            currentVideo={currentVideo}
+            pdfDoc={pdfDoc}
+            pdfPage={pdfPage}
+            compact
+            onChangePdfPage={(p) => setPdfPage(p)}
+          />
         </div>
       )}
 
       <footer className="text-center text-xs text-zinc-400 mt-16 pb-4">
-        Built with FastAPI · React · Chroma · 6 chunking strategies · LLM judge
+        Built with FastAPI · React · Chroma · 7 chunking strategies · LLM judge
       </footer>
     </div>
   );

@@ -22,9 +22,10 @@ class Settings(BaseSettings):
 
     # Chunking — multi-strategy
     enabled_strategies: str = (
-        "sliding_window,recursive_token,sentence_window,semantic,fixed_time,parent_child"
+        "sliding_window,recursive_token,sentence_window,semantic,fixed_time,parent_child,section_aware"
     )
     default_strategy: str = "sliding_window"
+    default_pdf_strategy: str = "section_aware"
 
     # Strategy-specific params
     recursive_token_size: int = 256
@@ -36,6 +37,16 @@ class Settings(BaseSettings):
     parent_chunk_chars: int = 1500
     parent_chunk_overlap: int = 200
     child_chunk_chars: int = 300
+    section_max_chars: int = 1800       # if a section exceeds this, subdivide
+    section_min_chars: int = 200        # tiny tail sections (e.g., "References" stubs) merged into prev
+
+    # PDFs
+    pdf_uploads_dir: str = "./uploads"
+    pdf_renders_dir: str = "./pdf_renders"
+    pdf_assets_dir: str = "./pdf_assets"        # extracted figures/tables
+    pdf_max_bytes: int = 50 * 1024 * 1024        # 50 MB per upload
+    pdf_default_extractor: str = "pypdfium2"     # "pypdfium2" | "marker"
+    pdf_render_scale: float = 1.5                # PNG render scale
 
     # Retrieval
     top_k_retrieve: int = 15

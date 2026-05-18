@@ -11,6 +11,8 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
   <script src="https://www.youtube.com/iframe_api"></script>
   <script>
     tailwind.config = {
@@ -89,6 +91,107 @@
       background: linear-gradient(90deg, rgb(var(--strat, 99 102 241)) 0%, rgb(var(--strat, 99 102 241)) 100%);
       transition: width 0.4s ease-out;
     }
+
+    /* Google-Doc-style prose for rendered markdown answers */
+    .answer-prose {
+      color: rgb(39 39 42);
+      font-size: 14.5px;
+      line-height: 1.7;
+      letter-spacing: -0.005em;
+    }
+    .answer-prose > *:first-child { margin-top: 0; }
+    .answer-prose > *:last-child { margin-bottom: 0; }
+    .answer-prose h1, .answer-prose h2, .answer-prose h3, .answer-prose h4, .answer-prose h5, .answer-prose h6 {
+      color: rgb(24 24 27);
+      letter-spacing: -0.02em;
+      font-weight: 700;
+    }
+    .answer-prose h1 { font-size: 1.7em; margin: 0.8em 0 0.4em; line-height: 1.25; }
+    .answer-prose h2 {
+      font-size: 1.35em; margin: 1.1em 0 0.5em; line-height: 1.3;
+      padding-bottom: 0.3em; border-bottom: 1px solid rgb(228 228 231);
+    }
+    .answer-prose h3 { font-size: 1.15em; font-weight: 600; margin: 1em 0 0.4em; line-height: 1.4; }
+    .answer-prose h4 { font-size: 1em; font-weight: 600; margin: 0.9em 0 0.3em; color: rgb(63 63 70); }
+    .answer-prose p { margin: 0.7em 0; }
+    .answer-prose ul, .answer-prose ol { margin: 0.7em 0; padding-left: 1.5em; }
+    .answer-prose ul { list-style: disc; }
+    .answer-prose ol { list-style: decimal; }
+    .answer-prose li { margin: 0.3em 0; padding-left: 0.2em; }
+    .answer-prose li::marker { color: rgb(99 102 241); }
+    .answer-prose li > p { margin: 0.3em 0; }
+    .answer-prose strong { font-weight: 600; color: rgb(24 24 27); }
+    .answer-prose em { font-style: italic; }
+    .answer-prose blockquote {
+      margin: 1em 0; padding: 0.6em 1em;
+      border-left: 3px solid rgb(99 102 241);
+      background: linear-gradient(90deg, rgb(238 242 255 / 0.6), rgb(238 242 255 / 0));
+      border-radius: 0 0.5rem 0.5rem 0;
+      color: rgb(63 63 70);
+    }
+    .answer-prose blockquote p { margin: 0.25em 0; }
+    .answer-prose code {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.88em; padding: 0.12em 0.4em;
+      background: rgb(244 244 245); border-radius: 0.25rem;
+      color: rgb(79 70 229); font-weight: 500;
+    }
+    .answer-prose pre {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.85em; padding: 0.9em 1.1em;
+      background: rgb(24 24 27); color: rgb(228 228 231);
+      border-radius: 0.5rem; overflow-x: auto; margin: 1em 0;
+      line-height: 1.55;
+    }
+    .answer-prose pre code {
+      background: transparent; color: inherit; padding: 0; font-size: inherit; font-weight: 400;
+    }
+    .answer-prose a {
+      color: rgb(79 70 229); text-decoration: underline;
+      text-decoration-color: rgb(199 210 254); text-underline-offset: 2px;
+      transition: text-decoration-color 0.15s;
+    }
+    .answer-prose a:hover { text-decoration-color: rgb(79 70 229); }
+    .answer-prose hr {
+      border: 0; height: 1px;
+      background: linear-gradient(90deg, transparent, rgb(228 228 231), transparent);
+      margin: 1.5em 0;
+    }
+    .answer-prose table {
+      width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 0.92em;
+      border-radius: 0.5rem; overflow: hidden;
+      box-shadow: 0 0 0 1px rgb(228 228 231);
+    }
+    .answer-prose th, .answer-prose td {
+      padding: 0.55em 0.85em; border-bottom: 1px solid rgb(228 228 231); text-align: left;
+    }
+    .answer-prose th { background: rgb(244 244 245); font-weight: 600; color: rgb(24 24 27); }
+    .answer-prose tr:last-child td { border-bottom: 0; }
+    .answer-prose .citation-pill {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 22px; height: 22px; padding: 0 6px; margin: 0 2px;
+      border-radius: 6px; border: 0;
+      background: rgb(238 242 255); color: rgb(67 56 202);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 11px; font-weight: 600;
+      cursor: pointer; vertical-align: 1px;
+      transition: background 0.15s, color 0.15s, transform 0.1s;
+    }
+    .answer-prose .citation-pill:hover {
+      background: rgb(79 70 229); color: white;
+    }
+    .answer-prose .citation-pill:active { transform: scale(0.95); }
+
+    /* Compact variant used inside narrow compare columns */
+    .answer-prose-sm { font-size: 13px; line-height: 1.6; }
+    .answer-prose-sm h1 { font-size: 1.35em; }
+    .answer-prose-sm h2 { font-size: 1.2em; padding-bottom: 0.2em; }
+    .answer-prose-sm h3 { font-size: 1.05em; }
+    .answer-prose-sm h4 { font-size: 0.95em; }
+    .answer-prose-sm pre { font-size: 0.78em; padding: 0.7em 0.85em; }
+    .answer-prose-sm ul, .answer-prose-sm ol { padding-left: 1.3em; }
+    .answer-prose-sm blockquote { padding: 0.4em 0.8em; }
+    .answer-prose-sm .citation-pill { min-width: 20px; height: 20px; font-size: 10.5px; padding: 0 5px; }
   </style>
 </head>
 <body class="bg-zinc-50 text-zinc-900">
@@ -306,32 +409,57 @@ function AskPanel({ onAsk, loading, compareMode, setCompareMode, judgeMode, setJ
   );
 }
 
-function CitedAnswer({ answer, sources, onJump }) {
+// Configure marked once — GFM + soft line breaks, no header IDs (avoid id collisions).
+if (window.marked) {
+  marked.setOptions({ gfm: true, breaks: true, headerIds: false, mangle: false });
+}
+
+// Render Claude's markdown answer to HTML while preserving [n] citations as
+// interactive pills. We swap [n] markers for sentinel tokens before parsing
+// (so markdown doesn't try to interpret them as reference links), then swap
+// them back to <button> tags after parsing.
+function renderAnswerHtml(rawText, validNs) {
+  if (!rawText) return "";
+  const text = rawText.replace(/\[(\d+)\]/g, (m, nStr) => {
+    const n = parseInt(nStr, 10);
+    return validNs.has(n) ? ` CITE${n} ` : m;
+  });
+  let html = window.marked ? marked.parse(text) : text;
+  html = html.replace(/ CITE(\d+) /g, (_, n) =>
+    `<button class="citation-pill" data-cite="${n}" title="Jump to citation ${n}">${n}</button>`
+  );
+  if (window.DOMPurify) {
+    html = DOMPurify.sanitize(html, {
+      ADD_TAGS: ['button'],
+      ADD_ATTR: ['class', 'data-cite', 'title'],
+    });
+  }
+  return html;
+}
+
+function CitedAnswer({ answer, sources, onJump, compact = false }) {
   if (!answer) return null;
-  const parts = answer.split(/(\[\d+\])/g);
+  const validNs = useMemo(() => new Set((sources || []).map((s) => s.n)), [sources]);
+  const html = useMemo(() => renderAnswerHtml(answer, validNs), [answer, validNs]);
+
+  // Event delegation: catch clicks on .citation-pill anywhere in the rendered tree.
+  const onClick = useCallback(
+    (e) => {
+      const btn = e.target.closest && e.target.closest('button.citation-pill');
+      if (!btn) return;
+      const n = parseInt(btn.getAttribute('data-cite'), 10);
+      const src = (sources || []).find((s) => s.n === n);
+      if (src) onJump(src.video_id, src.start);
+    },
+    [sources, onJump]
+  );
+
   return (
-    <div className="text-zinc-800 leading-relaxed whitespace-pre-wrap">
-      {parts.map((p, i) => {
-        const m = p.match(/^\[(\d+)\]$/);
-        if (m) {
-          const n = parseInt(m[1], 10);
-          const src = sources.find((s) => s.n === n);
-          if (src) {
-            return (
-              <button
-                key={i}
-                onClick={() => onJump(src.video_id, src.start)}
-                className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 mx-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[11px] font-mono font-semibold hover:bg-indigo-600 hover:text-white align-baseline transition-colors"
-                title={`Jump to ${src.timestamp} in "${src.title}"`}
-              >
-                {n}
-              </button>
-            );
-          }
-        }
-        return <span key={i}>{p}</span>;
-      })}
-    </div>
+    <div
+      className={`answer-prose${compact ? ' answer-prose-sm' : ''}`}
+      onClick={onClick}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   );
 }
 
@@ -430,8 +558,8 @@ function StrategyColumn({ result, judge, onJump }) {
         <span className="text-zinc-300">·</span>
         <span>{result.n_used}/{result.n_retrieved} chunks</span>
       </div>
-      <div className="flex-1 text-[13px] leading-relaxed">
-        <CitedAnswer answer={result.answer} sources={result.sources || []} onJump={onJump} />
+      <div className="flex-1">
+        <CitedAnswer answer={result.answer} sources={result.sources || []} onJump={onJump} compact />
       </div>
       {(result.sources || []).length > 0 && (
         <div className="mt-3 pt-3 border-t border-zinc-100 space-y-1">

@@ -106,11 +106,75 @@ def _format_retrieval_block(question: str, results: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+_VISUALS_SYSTEM = (
+    "You are an impartial evaluator scoring visual explanations generated from "
+    "video transcript snippets. For each visual element you will see its type, "
+    "title, and content (with [n] citations) plus the source snippets. Score each "
+    "visual on a 1-5 integer scale across four axes:\n"
+    "  - faithfulness: every claim / step / row is supported by the cited snippets.\n"
+    "  - relevance:    the visual actually helps answer the question.\n"
+    "  - citation:     [n] markers and the `citations` list are correct and exhaustive.\n"
+    "  - clarity:      the visual is concise, readable, and well-structured.\n"
+    "Return strict JSON:\n"
+    "{\"scores\": [{\"index\": int, \"type\": str, \"faithfulness\": int, \"relevance\": int, "
+    "\"citation\": int, \"clarity\": int, \"total\": int}], "
+    "\"overall\": {\"faithfulness\": int, \"relevance\": int, \"citation\": int, "
+    "\"clarity\": int, \"total\": int}, \"reasoning\": \"<2-3 sentences>\"}\n"
+    "`total` per visual = sum of four axes. Overall = average of per-visual totals rounded."
+)
+
+
+def _format_visuals_block(question: str, visuals: list[dict], hits: list[dict]) -> str:
+    snippet_lines = []
+    for i, h in enumerate(hits, start=1):
+        snippet_lines.append(f"  [{i}] {(h.get('text') or '')[:300]}")
+    snippets = "\n".join(snippet_lines) if snippet_lines else "  (no snippets)"
+
+    visual_lines = []
+    for i, v in enumerate(visuals):
+        t = v.get("type", "?")
+        title = v.get("title", "")
+        cites = v.get("citations", [])
+        header = f"--- Visual #{i} (type={t}, citations={cites})\nTitle: {title}"
+        if t == "concept_card":
+            body = (v.get("body") or "")[:600]
+            visual_lines.append(f"{header}\nBody: {body}")
+        elif t == "key_steps":
+            steps = "\n".join(f"  - {s}" for s in (v.get("steps") or []))
+            visual_lines.append(f"{header}\nSteps:\n{steps}")
+        elif t == "comparison_table":
+            cols = v.get("columns") or []
+            rows = "\n".join("  | " + " | ".join(str(c) for c in r) + " |" for r in (v.get("rows") or []))
+            visual_lines.append(f"{header}\nColumns: {cols}\nRows:\n{rows}")
+        elif t == "mermaid":
+            code = (v.get("code") or "")[:500]
+            visual_lines.append(f"{header}\nMermaid:\n{code}")
+        else:
+            visual_lines.append(header)
+    visuals_text = "\n\n".join(visual_lines) if visual_lines else "(no visuals)"
+    return f"Question: {question}\n\nSnippets:\n{snippets}\n\nVisuals:\n{visuals_text}"
+
+
 def judge_answers(question: str, results: list[dict]) -> dict:
     user = _format_answer_block(question, results)
     raw = _call_judge(_ANSWER_SYSTEM, user)
     parsed = _parse_json(raw)
     parsed["mode"] = "answer"
+    return parsed
+
+
+def judge_visuals(question: str, visuals: list[dict], hits: list[dict]) -> dict:
+    """Score a single question's visual panel against the retrieved hits.
+
+    Unlike `judge_answers` / `judge_retrieval` (which compare strategies), this
+    grades one set of visuals on faithfulness, relevance, citation, and clarity.
+    """
+    if not visuals:
+        return {"mode": "visuals", "scores": [], "overall": None, "reasoning": "No visuals to score."}
+    user = _format_visuals_block(question, visuals, hits)
+    raw = _call_judge(_VISUALS_SYSTEM, user)
+    parsed = _parse_json(raw)
+    parsed["mode"] = "visuals"
     return parsed
 
 

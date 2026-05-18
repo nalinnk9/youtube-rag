@@ -33,23 +33,23 @@ def _build_prompt(question: str, hits: list[dict]) -> tuple[str, str]:
     return system, user
 
 
-def _call_anthropic(system: str, user: str) -> str:
+def _call_anthropic(system: str, user: str, max_tokens: int = 800, model: str | None = None) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     msg = client.messages.create(
-        model=settings.llm_model,
-        max_tokens=800,
+        model=model or settings.llm_model,
+        max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],
     )
     return msg.content[0].text
 
 
-def _call_openai(system: str, user: str) -> str:
+def _call_openai(system: str, user: str, model: str | None = None) -> str:
     from openai import OpenAI
     client = OpenAI(api_key=settings.openai_api_key)
     resp = client.chat.completions.create(
-        model=settings.llm_model,
+        model=model or settings.llm_model,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -58,27 +58,25 @@ def _call_openai(system: str, user: str) -> str:
     return resp.choices[0].message.content or ""
 
 
-def generate_answer(question: str, hits: list[dict]) -> dict:
-    """Given a question and a list of retrieved hits, produce a cited answer."""
-    if not hits:
-        return {
-            "answer": "The indexed videos don't cover this (no relevant snippets found).",
-            "sources": [],
-        }
-
-    system, user = _build_prompt(question, hits)
-
+def call_llm(system: str, user: str, max_tokens: int = 800) -> str:
+    """Shared LLM-call helper. Routes to Anthropic or OpenAI based on settings."""
     provider = settings.llm_provider.lower()
     if provider == "anthropic":
-        text = _call_anthropic(system, user)
-    elif provider == "openai":
-        text = _call_openai(system, user)
-    else:
-        raise ValueError(f"Unknown LLM_PROVIDER: {settings.llm_provider!r}")
+        return _call_anthropic(system, user, max_tokens=max_tokens)
+    if provider == "openai":
+        return _call_openai(system, user)
+    raise ValueError(f"Unknown LLM_PROVIDER: {settings.llm_provider!r}")
 
-    # Extract the citation numbers the model actually used
+
+def build_sources_from_citations(text: str, hits: list[dict]) -> list[dict]:
+    """Parse [n] markers out of `text` and resolve them to source dicts for the UI.
+
+    Shared between `/ask` (which gets citations in prose) and `/visualize` (which
+    gets them inside structured visual objects). The output shape matches the
+    existing /ask response so the frontend renders citations identically.
+    """
     cited_numbers = sorted({int(n) for n in re.findall(r"\[(\d+)\]", text)})
-    sources = []
+    sources: list[dict] = []
     for n in cited_numbers:
         if 1 <= n <= len(hits):
             h = hits[n - 1]
@@ -95,5 +93,18 @@ def generate_answer(question: str, hits: list[dict]) -> dict:
                 "url": f"https://youtube.com/watch?v={h['video_id']}&t={start}s",
                 "snippet": h["text"],
             })
+    return sources
 
+
+def generate_answer(question: str, hits: list[dict]) -> dict:
+    """Given a question and a list of retrieved hits, produce a cited answer."""
+    if not hits:
+        return {
+            "answer": "The indexed videos don't cover this (no relevant snippets found).",
+            "sources": [],
+        }
+
+    system, user = _build_prompt(question, hits)
+    text = call_llm(system, user, max_tokens=800)
+    sources = build_sources_from_citations(text, hits)
     return {"answer": text, "sources": sources}
